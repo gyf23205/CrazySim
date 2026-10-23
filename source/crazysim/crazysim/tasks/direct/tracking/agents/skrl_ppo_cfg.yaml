@@ -1,0 +1,129 @@
+seed: 42
+
+# Models are instantiated using skrl's model instantiator utility
+# https://skrl.readthedocs.io/en/latest/api/utils/model_instantiators.html
+models:
+  separate: True  # policy and value networks are always separate (built in crazysim.methods.base)
+  policy:  # see gaussian_model parameters
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -3.0  # keeps the action noise std >= 0.05; lower values made training unstable
+    max_log_std: 2.0
+    initial_log_std: -0.5
+    network:
+      - name: net
+        input: STATES
+        layers: [256, 128, 64]
+        activations: elu
+    output: ACTIONS
+  value:  # see deterministic_model parameters
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: STATES
+        layers: [256, 128, 64]
+        activations: elu
+    output: ONE
+
+# Rollout memory
+# https://skrl.readthedocs.io/en/latest/api/memories/random.html
+memory:
+  class: RandomMemory
+  memory_size: -1  # automatically determined (same as agent:rollouts)
+
+# PPO agent configuration (field names are from PPO_DEFAULT_CONFIG)
+# https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
+agent:
+  class: PPO
+  rollouts: 24
+  learning_epochs: 5
+  mini_batches: 4
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 5.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.016
+    max_lr: 1.0e-03
+  state_preprocessor: null  # observations are already O(1); running normalization made training unstable
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 0.1
+  time_limit_bootstrap: True
+  # logging and checkpoint
+  experiment:
+    directory: "crazyflie_tracking"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+# Sequential trainer
+# https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html
+# timesteps is per task: one iteration = `rollouts` timesteps
+trainer:
+  class: SequentialTrainer
+  timesteps: 24000
+  environment_info: log
+
+
+# Settings of the transfer methods (scripts/skrl/train.py --method <name>).
+# Methods based on PPO (finetune, scratch, residual, componet, kae_moe) use the models/agent settings
+# above; stage 0 of residual, componet and kae_moe is the plain MLP policy of `models: policy`.
+methods:
+  finetune:
+    best_checkpoint_interval: 20  # iterations between candidates for the best checkpoint carried to the next task
+  residual:
+    hidden_dims: [256, 128, 64]  # residual network
+  componet:
+    internal_hidden_dims: [256, 128, 64]  # internal policy; the first entry is also the attention dimension
+  kae_moe:
+    padded_dim: 69  # observations and actions are padded with ones to this size before the KAE (>= observation size)
+    observable_dim: 16  # KAE latent size = experts per KAE
+    p: 1  # power of the Koopman operator in the expert outputs
+    residual_hidden_dims: [256, 128, 64]  # MLP pathway
+    weight_hidden_dims: [32]  # per-KAE mode-weight networks
+    router_hidden_dims: [128]  # router between KAEs
+    gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
+    kae:
+      observation_samples: 30000  # observations recorded after training to fit the sampling distribution
+      hidden_dim: 256
+      sample_count: 15000
+      batch_size: 2048
+      epochs: 7500
+      learning_rate: 1.0e-04
+      kae_coefficient: 0.1
+      action_coefficient: 0.9
+      seed: 777
+  fame:  # own PPO variant; rollout length taken from agent: rollouts
+    hidden_dims: [256, 128, 64]
+    lr_actor: 3.0e-04
+    lr_critic: 1.0e-03
+    lr_meta: 1.0e-03
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_ratio: 0.2
+    value_coef: 1.0
+    grad_norm_clip: 1.0
+    init_temperature: 0.1
+    alpha_lr: 1.0e-04
+    target_entropy: null  # null: -action_dim
+    ppo_epochs: 5
+    num_mini_batches: 4
+    mini_batch_size: 4096
+    rewards_shaper_scale: 1.0
+    size_fast2meta: 100000  # most recent states of the current task used for distillation
+    size_meta: 500000  # states of earlier tasks
+    detection_steps: 1000  # steps per candidate when choosing the initial actor of a task
+    epoch_meta: 200
+    meta_lr_scheduler_gamma: 0.95

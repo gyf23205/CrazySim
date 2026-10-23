@@ -1,0 +1,27 @@
+# Python
+**/*.egg-info/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+
+# Omniverse
+**/*.dmp
+**/.thumbs
+**/*.usd
+**/*.usda
+**/*.usdc
+**/*.usdz
+
+# IDE
+**/.idea/
+.vscode/.python.env
+
+# Outputs
+**/logs/*
+**/outputs/*
+**/videos/*
+**/wandb/*
+
+# Models
+**/*.pth
+**/*.pt
