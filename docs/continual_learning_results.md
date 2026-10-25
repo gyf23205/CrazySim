@@ -3,6 +3,9 @@
 Results of six methods trained on the task sequence circle → rectangle → figure8 in this repository
 (single seed, 2026-10-21/22). All numbers come from the `session.json` file of each run unless stated otherwise.
 
+The sequence continued with two more tasks (star, vertical circle), and every method keeping the best checkpoint
+of each task, is in [continual_learning_results_5tasks.md](continual_learning_results_5tasks.md).
+
 ## Setup
 
 - **Robot and control.** Crazyflie 2.x in Isaac Lab; the policy sets the four motor thrusts directly at 100 Hz.
