@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
-
-from .base import BEST_CHECKPOINT, FINAL_CHECKPOINT, Method
+from .base import Method
 
 
 class Scratch(Method):
@@ -26,33 +24,30 @@ class Scratch(Method):
         return agent
 
     def end_stage(self, index, task, stage_dir, agent):
+        self.load_best_checkpoint(agent, stage_dir)
         return self.ppo_policy(agent)
+
+    def resume(self, stages):
+        pass
 
 
 class Finetune(Scratch):
-    """Every task starts from the best agent (policy, value, optimizer) of the previous task.
-
-    "Best" is skrl's best checkpoint: the highest mean training episode return, checked every
-    ``methods.finetune.best_checkpoint_interval`` iterations. The best agent is also the stage's policy.
-    """
+    """Every task starts from the best agent (policy, value, optimizer) of the previous task."""
 
     name = "finetune"
 
     def start_stage(self, index, task, stage_dir):
-        interval = self.method_cfg["best_checkpoint_interval"] * self.agent_cfg["agent"]["rollouts"]
-        agent = self.build_ppo_agent(self.new_mlp_actor(), stage_dir, checkpoint_interval=interval)
+        agent = self.build_ppo_agent(self.new_mlp_actor(), stage_dir)
         if self.checkpoint:
             print(f"[INFO] Initializing from checkpoint: {self.checkpoint}")
             agent.load(self.checkpoint)
         return agent
 
     def end_stage(self, index, task, stage_dir, agent):
-        best = agent.checkpoint_best_modules
-        self.checkpoint = os.path.join(stage_dir, BEST_CHECKPOINT)
-        if not os.path.isfile(self.checkpoint):  # no complete episode was recorded
-            self.checkpoint = os.path.join(stage_dir, FINAL_CHECKPOINT)
-        agent.load(self.checkpoint)
-        self.stage_info = {"carried_checkpoint": self.checkpoint, "best_timestep": best["timestep"],
-                           "best_training_return": float(best["reward"])}
-        print(f"[INFO] Best checkpoint at timestep {best['timestep']} (training return {best['reward']:.2f})")
+        self.checkpoint = self.load_best_checkpoint(agent, stage_dir)
         return self.ppo_policy(agent)
+
+    def resume(self, stages):
+        # "carried_checkpoint": sessions made before every method selected the best checkpoint
+        last = stages[-1]
+        self.checkpoint = last.get("selected_checkpoint", last.get("carried_checkpoint"))

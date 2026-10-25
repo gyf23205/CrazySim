@@ -20,8 +20,15 @@ atanh. The inversion fails when an action saturates (``tanh`` returns exactly +-
 pre-squash mean of 10 and standard deviation 0.0067 it gives a log-probability of about -84000
 instead of 22, the probability ratio overflows and the parameters become NaN.
 
-The policy saved for each stage is the fast actor trained on that task; the meta actor is saved
-next to it as ``meta_policy.pt``.
+The fast learner kept from each stage is skrl's best checkpoint of the stage (highest mean training
+episode return), as for the other methods. If that is not the final one, the states used for the
+distillation are re-collected with the best fast actor, since the states recorded during training
+were visited by later actors. The policy saved for each stage is that fast actor; the meta actor is
+saved next to it as ``meta_policy.pt``.
+
+Resuming a session (:meth:`Fame.resume`) loads the last meta actor. The buffer of earlier-task states
+is not saved, so it is refilled with states visited by each stage's saved fast actor (stochastic
+actions) on its task, as many per task as the distillation buffer held during training.
 """
 
 from __future__ import annotations
@@ -175,10 +182,18 @@ class FAMEAgent(Agent):
     # -- skrl interface ------------------------------------------------------------------------
 
     def init(self, trainer_cfg=None):
-        """Called by every stage's trainer: opens the stage's TensorBoard writer and clears the rollout."""
+        """Called by every stage's trainer: opens the stage's TensorBoard writer, clears the rollout and
+        restarts the episode-return tracking, so that the stage's best checkpoint is chosen among this
+        stage's agents only."""
         super().init(trainer_cfg=trainer_cfg)
         self._rollout = None
         self._step = 0
+        self.checkpoint_best_modules = {"timestep": 0, "reward": -(2**31), "saved": False, "modules": {}}
+        self.tracking_data.clear()
+        self._track_rewards.clear()
+        self._track_timesteps.clear()
+        self._cumulative_rewards = None
+        self._cumulative_timesteps = None
 
     def set_running_mode(self, mode: str):
         self.training = mode == "train"
@@ -417,7 +432,41 @@ class Fame(Method):
         return self.agent
 
     def end_stage(self, index, task, stage_dir, agent):
+        self.load_best_checkpoint(agent, stage_dir)
+        if self.stage_info["best_timestep"] < self.agent_cfg["trainer"]["timesteps"]:
+            agent.fast2meta.clear()
+            agent.fast2meta.add(self._visited_states(agent.fast_actor, task))
+            print(f"[FAME] Re-collected {agent.fast2meta.size} states of {task} with the best fast actor")
         policy = SquashedMean(copy.deepcopy(agent.fast_actor))
         agent.end_task()
         torch.save(SquashedMean(copy.deepcopy(agent.meta_actor)), os.path.join(stage_dir, "meta_policy.pt"))
         return policy
+
+    def resume(self, stages):
+        meta = self.load_module(os.path.join(os.path.dirname(stages[-1]["policy"]), "meta_policy.pt"))
+        self.agent.meta_actor.load_state_dict(meta.actor.state_dict())
+        self.agent._meta_trained = True
+        self.agent.meta_buffer.clear()
+        for stage in stages:
+            states = self._visited_states(self.load_module(stage["policy"]).actor, stage["task"])
+            self.agent.meta_buffer.add(states)
+            print(f"[FAME] Refilled the meta buffer with {states.shape[0]} states of {stage['task']}")
+
+    def _visited_states(self, actor: SquashedActor, task: str) -> torch.Tensor:
+        """The last ``size_fast2meta`` states visited by the stochastic ``actor`` on ``task``.
+
+        One episode length of warm-up comes first, so that the episodes are spread over their length
+        as in training.
+        """
+        self.env.unwrapped.set_task(task)
+        self.env._reset_once = True
+        obs, _ = self.env.reset()
+        num_steps = math.ceil(self.agent.fast2meta.capacity / self.env.num_envs)
+        states = []
+        with torch.no_grad():
+            for step in range(int(self.env.unwrapped.max_episode_length) + num_steps):
+                if step >= int(self.env.unwrapped.max_episode_length):
+                    states.append(obs.clone())
+                obs, _, _, _, _ = self.env.step(actor(obs).sample())
+        self.env._reset_once = True
+        return torch.cat(states)[-self.agent.fast2meta.capacity :]

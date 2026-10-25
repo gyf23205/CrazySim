@@ -55,6 +55,10 @@ class Residual(Method):
         return self.build_ppo_agent(actor, stage_dir)
 
     def end_stage(self, index, task, stage_dir, agent):
+        self.load_best_checkpoint(agent, stage_dir)
         policy = self.ppo_policy(agent)
         self.base = freeze(copy.deepcopy(policy))
         return policy
+
+    def resume(self, stages):
+        self.base = freeze(self.load_module(stages[-1]["policy"]))

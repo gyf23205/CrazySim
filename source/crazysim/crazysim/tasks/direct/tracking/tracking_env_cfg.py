@@ -8,7 +8,7 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 
-from .trajectories import CircleCfg, Figure8Cfg, RectangleCfg, TrajectoryCfg
+from .trajectories import CircleCfg, Figure8Cfg, RectangleCfg, StarCfg, TrajectoryCfg
 
 ##
 # Pre-defined configs
@@ -92,6 +92,8 @@ class TrackingEnvCfg(DirectRLEnvCfg):
         "circle": CircleCfg(),
         "rectangle": RectangleCfg(),
         "figure8": Figure8Cfg(),
+        "star": StarCfg(),
+        "vertical_circle": CircleCfg(plane="xz"),
     }
 
     # reset

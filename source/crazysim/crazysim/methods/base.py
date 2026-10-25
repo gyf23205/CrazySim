@@ -7,6 +7,14 @@ from earlier stages. ``scripts/skrl/train.py`` drives every method the same way:
     SequentialTrainer(env, agent).train()                # train on the task
     policy = method.end_stage(index, task, stage_dir, agent)
 
+``method.resume(stages)`` restores the state after the stages of an earlier session, so that a
+session can be continued with further tasks (``train.py --resume``).
+
+Every method ends a stage with :meth:`Method.load_best_checkpoint`: the stage's policy, and what is
+carried to the next stage, come from skrl's best checkpoint of the stage (highest mean training
+episode return, checked every ``agent.experiment.checkpoint_interval`` timesteps), not from the
+agent at the end of training.
+
 ``policy`` is a plain ``nn.Module`` mapping observations to deterministic actions. It is saved as
 ``<stage_dir>/policy.pt`` (the whole module, frozen parts included), so evaluation and playback
 do not depend on how the method built it.
@@ -137,20 +145,38 @@ class Method:
     def end_stage(self, index: int, task: str, stage_dir: str, agent: Agent) -> nn.Module:
         raise NotImplementedError
 
+    def resume(self, stages: list[dict]):
+        """Restore the state after the finished ``stages`` (entries of an earlier ``session.json``)."""
+        raise NotImplementedError(f"Method '{self.name}' cannot resume a session.")
+
+    def load_module(self, path: str) -> nn.Module:
+        """A whole module saved with ``torch.save``, such as a stage's ``policy.pt``."""
+        return torch.load(path, map_location=self.device, weights_only=False)
+
     # -- helpers for PPO-based methods --------------------------------------------------------
 
-    def build_ppo_agent(self, actor: nn.Module, stage_dir: str, checkpoint_interval: int | None = None) -> Agent:
-        """skrl PPO agent with the configured hyperparameters, ``actor`` as mean network and a new value network.
+    def load_best_checkpoint(self, agent: Agent, stage_dir: str) -> str:
+        """Load the stage's best checkpoint into ``agent`` and return its path.
 
-        ``checkpoint_interval`` (timesteps) overrides the configured interval. skrl also updates its best
-        checkpoint (``checkpoints/best_agent.pt``, highest mean training episode return) at that interval.
+        skrl updates the best checkpoint (``checkpoints/best_agent.pt``, highest mean training episode
+        return) at every checkpoint interval. Falls back to the final checkpoint when no episode ended.
         """
+        best = agent.checkpoint_best_modules
+        path = os.path.join(stage_dir, BEST_CHECKPOINT)
+        if not os.path.isfile(path):
+            path = os.path.join(stage_dir, FINAL_CHECKPOINT)
+        agent.load(path)
+        self.stage_info = {"selected_checkpoint": path, "best_timestep": best["timestep"],
+                           "best_training_return": float(best["reward"])}
+        print(f"[INFO] Best checkpoint at timestep {best['timestep']} (training return {best['reward']:.2f})")
+        return path
+
+    def build_ppo_agent(self, actor: nn.Module, stage_dir: str) -> Agent:
+        """skrl PPO agent with the configured hyperparameters, ``actor`` as mean network and a new value network."""
         cfg = copy.deepcopy(self.agent_cfg)
         cfg.pop("methods", None)
         cfg["agent"]["experiment"]["directory"] = stage_dir
         cfg["agent"]["experiment"]["experiment_name"] = ""
-        if checkpoint_interval is not None:
-            cfg["agent"]["experiment"]["checkpoint_interval"] = checkpoint_interval
         models = {
             "policy": GaussianPolicy(
                 self.env.observation_space, self.env.action_space, self.device, actor, cfg["models"]["policy"]

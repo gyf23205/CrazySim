@@ -187,6 +187,11 @@ class Componet(Method):
         return self.build_ppo_agent(ActionOnly(unit), stage_dir)
 
     def end_stage(self, index, task, stage_dir, agent):
+        self.load_best_checkpoint(agent, stage_dir)
         policy = self.ppo_policy(agent)
         self.units.append(copy.deepcopy(agent.policy.actor.unit))
         return policy
+
+    def resume(self, stages):
+        # policy.pt of a stage is DeterministicPolicy(ActionOnly(unit))
+        self.units = [self.load_module(stage["policy"]).actor.unit for stage in stages]

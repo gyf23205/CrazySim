@@ -14,6 +14,9 @@ Examples:
     python scripts/skrl/train.py --tasks circle rectangle figure8 --method scratch --headless
     # transfer methods
     python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe --headless
+    # continue a finished session with further tasks (same method)
+    python scripts/skrl/train.py --tasks star vertical_circle --method kae_moe --headless \
+        --resume logs/skrl/crazyflie_tracking/<session>
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -47,6 +50,13 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--max_iterations", type=int, default=None, help="Training iterations per task.")
 parser.add_argument(
     "--checkpoint", type=str, default=None, help="Agent checkpoint to initialize the first task (finetune, scratch)."
+)
+parser.add_argument(
+    "--resume",
+    type=str,
+    default=None,
+    help="Session directory to continue: the method state after its last stage is restored and --tasks are trained "
+    "as the next stages, in a new session directory.",
 )
 parser.add_argument("--run_name", type=str, default=None, help="Suffix of the session directory name.")
 parser.add_argument("--no_eval", action="store_true", default=False, help="Skip the evaluation after each task.")
@@ -96,7 +106,7 @@ from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import crazysim  # noqa: F401
-from crazysim.evaluation import METRICS, evaluate_tasks, format_table, switch_task
+from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_policy, switch_task
 from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
 from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg
 
@@ -107,7 +117,17 @@ assert sorted(METHOD_NAMES) == sorted(METHODS), "METHOD_NAMES is out of sync wit
 def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     """Train on every task of the sequence with the selected method."""
     tasks = args_cli.tasks
-    unknown = [task for task in tasks if task not in env_cfg.tasks]
+    previous = None
+    if args_cli.resume:
+        with open(os.path.join(args_cli.resume, "session.json")) as f:
+            previous = json.load(f)
+        if previous["method"] != args_cli.method:
+            raise ValueError(f"--resume session used method '{previous['method']}', not '{args_cli.method}'.")
+        if args_cli.checkpoint:
+            raise ValueError("--checkpoint cannot be combined with --resume.")
+    # all tasks of the session, earlier ones (when resuming) included
+    all_tasks = (previous["tasks"] if previous else []) + tasks
+    unknown = [task for task in all_tasks if task not in env_cfg.tasks]
     if unknown:
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")
     if args_cli.checkpoint and args_cli.method not in ("finetune", "scratch"):
@@ -129,19 +149,21 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
 
     # session directory: logs/skrl/<experiment>/<time-stamp>_<method>_<tasks>[_<run_name>]/<index>_<task>/
     log_root_path = os.path.abspath(os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"]))
-    session_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{args_cli.method}_{'-'.join(tasks)}"
+    session_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{args_cli.method}_{'-'.join(all_tasks)}"
     if args_cli.run_name:
         session_name += f"_{args_cli.run_name}"
     session_dir = os.path.join(log_root_path, session_name)
     print(f"[INFO] Logging session in directory: {session_dir}")
 
     session = {
-        "tasks": tasks,
+        "tasks": all_tasks,
         "method": args_cli.method,
         "seed": agent_cfg["seed"],
         "command": " ".join(sys.orig_argv),
-        "stages": [],
+        "stages": list(previous["stages"]) if previous else [],
     }
+    if previous:
+        session["resumed_from"] = os.path.abspath(args_cli.resume)
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = session_dir
@@ -165,10 +187,25 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
 
     transfer_writer = SummaryWriter(log_dir=os.path.join(session_dir, "transfer"))
     results = {}
-    for index, task in enumerate(tasks):
+    if previous:
+        print(f"[INFO] Resuming after stage {previous['stages'][-1]['stage']} of {args_cli.resume}")
+        method.resume(previous["stages"])
+        results = {stage: dict(row) for stage, row in previous.get("transfer", {}).items()}
+        if not args_cli.no_eval:
+            # complete the earlier rows of the transfer matrix with the new tasks
+            for index, stage_info in enumerate(previous["stages"]):
+                policy = load_policy(stage_info["policy"], env)
+                results.setdefault(stage_info["stage"], {}).update(evaluate_tasks(env, policy, tasks))
+                for evaluated_task, metrics in results[stage_info["stage"]].items():
+                    for metric, value in metrics.items():
+                        transfer_writer.add_scalar(f"Transfer/{metric}/{evaluated_task}", value, index)
+            transfer_writer.flush()
+            session["transfer"] = results
+    first_index = len(session["stages"])
+    for index, task in enumerate(tasks, start=first_index):
         stage = f"{index}_{task}"
         stage_dir = os.path.join(session_dir, stage)
-        print(f"\n[INFO] Stage {index + 1}/{len(tasks)}: training on '{task}' ({args_cli.method})")
+        print(f"\n[INFO] Stage {index + 1}/{len(all_tasks)}: training on '{task}' ({args_cli.method})")
         start_time = time.time()
         switch_task(env, task)
 
@@ -194,7 +231,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         session["stages"].append(stage_info)
 
         if not args_cli.no_eval:
-            results[stage] = evaluate_tasks(env, policy, tasks)
+            results[stage] = evaluate_tasks(env, policy, all_tasks)
             for evaluated_task, metrics in results[stage].items():
                 for metric, value in metrics.items():
                     transfer_writer.add_scalar(f"Transfer/{metric}/{evaluated_task}", value, index)

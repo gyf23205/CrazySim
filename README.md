@@ -7,13 +7,15 @@ Isaac Lab tasks for training Crazyflie controllers and measuring how methods tra
   The thrusts are converted to body force and torque with the motor mixing of the Crazyflie firmware
   (`power_distribution_quadrotor.c`): motor order m1 front-right, m2 back-right, m3 back-left, m4 front-left;
   arm length 0.046 m; thrust-to-torque 0.005964552 m.
-- **Tasks**: follow a reference curve in a horizontal plane at 1 m height, centered at the environment origin.
+- **Tasks**: follow a reference curve centered 1 m above the environment origin, in a horizontal plane unless stated.
 
   | name        | curve                                         | default size                       | period |
   |-------------|-----------------------------------------------|------------------------------------|--------|
   | `circle`    | circle                                        | radius 0.5 m                       | 6 s    |
   | `rectangle` | rectangle perimeter at constant speed         | 1.0 m x 0.6 m                      | 6 s    |
   | `figure8`   | lemniscate of Gerono, `x = a sin θ, y = b sin 2θ` | a = 0.6 m, b = 0.3 m           | 6 s    |
+  | `star`      | five-pointed star perimeter at constant speed | tip radius 0.5 m, notch radius 0.2 m | 6 s  |
+  | `vertical_circle` | circle in the vertical x-z plane (height 0.5 to 1.5 m) | radius 0.5 m           | 6 s    |
 
 All tasks share one gym id (`CrazySim-Tracking-Direct-v0`) and identical observation and action spaces,
 so any policy can run on any task. The active task is switched in-process with `env.unwrapped.set_task(name)`.
@@ -90,7 +92,7 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 
 | `--method` | stage 0 | stage k > 0 | reference code in `less_leg_walking_1` |
 |---|---|---|---|
-| `finetune` | MLP policy | starts from the best agent (policy, value network, optimizer) of stage k-1: skrl's checkpoint with the highest mean training episode return, checked every 20 iterations; that agent is also the stage's evaluated policy | - |
+| `finetune` | MLP policy | starts from the best agent (policy, value network, optimizer) of stage k-1 | - |
 | `scratch` | MLP policy | new MLP policy; reference for how much the other methods transfer | `train_scratch.py` |
 | `residual` | MLP policy | frozen policy of stage k-1 plus a new residual MLP whose output layer starts at zero; base + residual becomes the next base | `res_net.py`, `train_res_CRL.py` |
 | `componet` | MLP policy | new CompoNet unit attending over the frozen units of stages 0..k-1 | `baselines/CompoNet.py`, `train_componet_CRL.py` |
@@ -99,6 +101,12 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 
 - The code is in [crazysim/methods](source/crazysim/crazysim/methods); each file's docstring lists what differs from the
   reference code.
+- Every method keeps the **best agent** of each stage, not the agent at the end of training: skrl's checkpoint with
+  the highest mean training episode return (`checkpoints/best_agent.pt`), checked every 20 iterations
+  (`agent.experiment.checkpoint_interval: 480` timesteps). It is the stage's evaluated `policy.pt` and what the next
+  stage builds on (the base of `residual`, the unit of `componet`, the policy the KAE of `kae_moe` is fitted to, the
+  fast learner that `fame` distills). Sessions named `*_setpoints_all` predate this: there only `finetune` used the
+  best agent and the other methods kept the final one.
 - `finetune`, `scratch`, `residual`, `componet` and `kae_moe` all use the same skrl PPO settings and differ only
   in the policy network. Policy and value networks are separate. The value network and the action noise are new at
   every stage, except for `finetune`.
@@ -115,6 +123,12 @@ Options:
 
 - `--max_iterations N`: iterations per task (default 1000; one iteration = 24 steps of every environment).
 - `--checkpoint PATH`: initialize the first task of `finetune` or `scratch` from an agent checkpoint.
+- `--resume SESSION_DIR`: continue a finished session of the same method with the tasks of `--tasks` as further
+  stages (e.g. `--tasks star vertical_circle`). The method state after the session's last stage is restored from its
+  files (`finetune`: the carried checkpoint; `residual`, `componet`: the stage policies; `kae_moe`: the KAEs; `fame`:
+  the meta learner, with its buffer of earlier-task states refilled by rolling out each stage's fast learner). A new
+  session directory is created; its `session.json` lists the earlier stages too, and the earlier policies are
+  evaluated on the new tasks to complete the transfer matrix.
 - `--num_envs`, `--seed`, `--run_name`, `--no_eval`.
 - Hydra overrides for the env and agent configurations, e.g. `env.tasks.circle.radius=0.8 agent.agent.learning_rate=3e-4`.
 
@@ -122,7 +136,8 @@ Each run creates a session directory `logs/skrl/crazyflie_tracking/<time>_<metho
 
 ```
 params/            env and agent configurations
-0_circle/          stage 0: TensorBoard logs, policy.pt (deterministic policy), checkpoints/final_agent.pt
+0_circle/          stage 0: TensorBoard logs, policy.pt (deterministic policy of the best agent),
+                   checkpoints/best_agent.pt, checkpoints/final_agent.pt (end of training), checkpoints/agent_<t>.pt
 1_rectangle/
 2_figure8/
 transfer/          TensorBoard scalars Transfer/<metric>/<task> per stage

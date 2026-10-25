@@ -3,7 +3,7 @@
 Ported from ``less_leg_walking_1`` (``MoE.py``, ``scripts/rsl_rl/train_moe_CRL.py``, ``train_moe.py``).
 
 Stage 0 trains a plain MLP policy. At the end of every stage, a Koopman autoencoder (KAE) is fitted
-to that stage's policy (:mod:`.kae`). Stage k trains a policy that blends two pathways:
+to that stage's (best) policy (:mod:`.kae`). Stage k trains a policy that blends two pathways:
 
 - KAE pathway: the eigen-modes of the KAEs of stages 0..k-1 are the experts. A router network splits
   a unit L1 budget between the KAEs, and one weight network per KAE weighs its modes.
@@ -115,6 +115,7 @@ class KaeMoe(Method):
             # hooks are saved with the module; remove it before the policy is copied and saved
             self._gate_hook.remove()
             self._gate_hook = None
+        self.load_best_checkpoint(agent, stage_dir)
         policy = self.ppo_policy(agent)
 
         cfg = self.method_cfg
@@ -128,3 +129,9 @@ class KaeMoe(Method):
         torch.save(kae, os.path.join(kae_dir, "kae.pt"))
         self.experts.append(KAEExperts(kae, self.action_dim, cfg["p"]).to(self.device))
         return policy
+
+    def resume(self, stages):
+        self.experts = []
+        for stage in stages:
+            kae = self.load_module(os.path.join(os.path.dirname(stage["policy"]), "kae", "kae.pt"))
+            self.experts.append(KAEExperts(kae, self.action_dim, self.method_cfg["p"]).to(self.device))

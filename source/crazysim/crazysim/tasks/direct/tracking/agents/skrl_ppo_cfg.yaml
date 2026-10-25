@@ -66,7 +66,9 @@ agent:
     directory: "crazyflie_tracking"
     experiment_name: ""
     write_interval: auto
-    checkpoint_interval: auto
+    # timesteps (20 iterations) between checkpoints; each one is a candidate for the best checkpoint,
+    # which every method uses as the stage's policy and carries to the next task
+    checkpoint_interval: 480
 
 # Sequential trainer
 # https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html
@@ -81,8 +83,6 @@ trainer:
 # Methods based on PPO (finetune, scratch, residual, componet, kae_moe) use the models/agent settings
 # above; stage 0 of residual, componet and kae_moe is the plain MLP policy of `models: policy`.
 methods:
-  finetune:
-    best_checkpoint_interval: 20  # iterations between candidates for the best checkpoint carried to the next task
   residual:
     hidden_dims: [256, 128, 64]  # residual network
   componet:

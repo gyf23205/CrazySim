@@ -1,6 +1,6 @@
 """Crazyflie trajectory-tracking environment.
 
-A single gym id covers every tracking task. The task (circle, rectangle, figure8, ...) is selected
+A single gym id covers every tracking task. The task (circle, rectangle, figure8, star, vertical_circle) is selected
 with ``env.unwrapped.set_task(name)``, so a sequence of tasks can be trained in one process.
 """
 
