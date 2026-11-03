@@ -1,0 +1,85 @@
+seed: 42
+
+# Same models as the scratch PPO of Drone_Test_TRO (BoundedScratchPolicy, BoundedValue): tanh-squashed Gaussian
+# policy with a state-independent noise, separate value network, running normalization of the observations.
+models:
+  separate: True
+  policy:
+    class: SquashedGaussian
+    initial_log_std: 0.0
+    min_log_std: -3.0  # keeps the noise std before the tanh >= 0.05; BoundedScratchPolicy has no floor
+    network:
+      - name: net
+        input: STATES
+        layers: [64, 64]
+        activations: elu
+    output: ACTIONS
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: STATES
+        layers: [64, 64]
+        activations: elu
+    output: ONE
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+# Equal to build_setpoint_skrl_config of Drone_Test_TRO, except rollouts, learning rate and its scheduler: that
+# configuration collects 800 steps of one drone per update, this one 96 steps of each of 4096 environments.
+agent:
+  class: PPO
+  rollouts: 96
+  learning_epochs: 5
+  mini_batches: 4
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 5.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.016
+    max_lr: 1.0e-03
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 0.01
+  time_limit_bootstrap: False
+  experiment:
+    directory: "crazyflie_tracking_waypoint"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: 1920  # 20 iterations
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 48000  # 500 iterations
+  environment_info: log
+
+# KAE of scripts/skrl/fit_kae.py. Drone_Test_TRO loads KAEs with hidden size 64 whose input is the observation
+# plus one constant column: padded_dim = 56 + 1.
+kae:
+  padded_dim: 57
+  observable_dim: 16
+  p: 1
+  observation_samples: 30000
+  hidden_dim: 64
+  sample_count: 15000
+  batch_size: 2048
+  epochs: 7500
+  learning_rate: 1.0e-04
+  kae_coefficient: 0.1
+  action_coefficient: 0.9
+  seed: 777

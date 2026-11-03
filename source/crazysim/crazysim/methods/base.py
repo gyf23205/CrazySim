@@ -35,6 +35,8 @@ from skrl.utils.runner.torch import Runner
 
 from isaaclab_rl.skrl import SkrlVecEnvWrapper
 
+from .squashed import SquashedGaussianPolicy
+
 FINAL_CHECKPOINT = os.path.join("checkpoints", "final_agent.pt")
 """Agent checkpoint written at the end of each stage, relative to the stage directory."""
 BEST_CHECKPOINT = os.path.join("checkpoints", "best_agent.pt")
@@ -177,8 +179,9 @@ class Method:
         cfg.pop("methods", None)
         cfg["agent"]["experiment"]["directory"] = stage_dir
         cfg["agent"]["experiment"]["experiment_name"] = ""
+        policy_class = SquashedGaussianPolicy if self._squashed_policy else GaussianPolicy
         models = {
-            "policy": GaussianPolicy(
+            "policy": policy_class(
                 self.env.observation_space, self.env.action_space, self.device, actor, cfg["models"]["policy"]
             ),
             "value": Value(
@@ -190,9 +193,16 @@ class Method:
         agent.experiment_dir = stage_dir
         return agent
 
+    @property
+    def _squashed_policy(self) -> bool:
+        return self.agent_cfg["models"]["policy"]["class"] == "SquashedGaussian"
+
     def new_mlp_actor(self) -> nn.Module:
-        """Plain MLP mean network with the configured policy layers."""
-        return make_mlp(self.obs_dim, network_layers(self.agent_cfg, "policy"), self.action_dim).to(self.device)
+        """MLP mean network with the configured policy layers, bounded for a squashed Gaussian policy."""
+        actor = make_mlp(self.obs_dim, network_layers(self.agent_cfg, "policy"), self.action_dim)
+        if self._squashed_policy:
+            actor.append(nn.Tanh())
+        return actor.to(self.device)
 
     @staticmethod
     def ppo_policy(agent: Agent) -> DeterministicPolicy:

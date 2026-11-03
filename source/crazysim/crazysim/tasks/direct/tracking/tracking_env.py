@@ -26,22 +26,31 @@ def reference_observation_size(cfg: TrackingEnvCfg) -> int:
 
 
 class TrackingEnv(DirectRLEnv):
-    """Crazyflie following a reference trajectory with direct per-motor thrust commands.
+    """Crazyflie following a reference trajectory with body-rate and collective-thrust commands
+    (or per-motor thrust commands, see ``TrackingEnvCfg.action_mode``).
 
     Every task shares the same observation and action spaces, so one policy can be trained on a
     sequence of tasks. Call :meth:`set_task` and then reset the environment to switch tasks.
     """
 
     cfg: TrackingEnvCfg
+    ACTION_MODES = ("body_rates", "motor_thrusts")
+    REWARD_TERMS = ("position_tracking", "velocity_tracking", "ang_vel", "yaw", "action_rate")
+
+    @staticmethod
+    def _observation_size(cfg: TrackingEnvCfg) -> int:
+        return reference_observation_size(cfg) + 3 + 3 + 9 + 4
 
     def __init__(self, cfg: TrackingEnvCfg, render_mode: str | None = None, **kwargs):
         # keep the observation size consistent with the reference settings after CLI overrides
-        cfg.observation_space = reference_observation_size(cfg) + 3 + 3 + 9 + 4
+        cfg.observation_space = self._observation_size(cfg)
         super().__init__(cfg, render_mode, **kwargs)
 
-        # Actions: one normalized thrust per motor in [-1, 1]
-        self._actions = torch.zeros(self.num_envs, 4, device=self.device)
-        self._previous_actions = torch.zeros(self.num_envs, 4, device=self.device)
+        if self.cfg.action_mode not in self.ACTION_MODES:
+            raise ValueError(f"Unknown action_mode '{self.cfg.action_mode}'. Use one of {self.ACTION_MODES}.")
+        # Actions: normalized values in [-1, 1] (see TrackingEnvCfg.action_mode)
+        self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
+        self._previous_actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         # Total thrust and moment applied to the base of the quadcopter
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -64,6 +73,16 @@ class TrackingEnv(DirectRLEnv):
             ],
             device=self.device,
         )
+        # [total thrust; body torque] = allocation @ motor thrusts, inverted to mix commands into motor thrusts
+        allocation = torch.cat([torch.ones(1, 4, device=self.device), self._mixer], dim=0)
+        self._allocation_inverse = torch.linalg.inv(allocation)
+
+        # Rate controller (body_rates mode): commanded rates and thrust, inertia of the body
+        self._desired_body_rate = torch.zeros(self.num_envs, 3, device=self.device)
+        self._collective_thrust = torch.zeros(self.num_envs, device=self.device)
+        self._max_body_rate = torch.tensor(self.cfg.max_body_rate, device=self.device)
+        self._body_rate_gain = torch.tensor(self.cfg.body_rate_gain, device=self.device)
+        self._inertia = self._robot.root_physx_view.get_inertias()[0, self._body_id[0]].to(self.device).view(3, 3)
 
         # Reference trajectory
         self._lookahead_times = torch.tensor(self.cfg.lookahead_times, device=self.device)
@@ -80,13 +99,7 @@ class TrackingEnv(DirectRLEnv):
         # Logging
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in [
-                "position_tracking",
-                "velocity_tracking",
-                "ang_vel",
-                "yaw",
-                "action_rate",
-            ]
+            for key in self.REWARD_TERMS
         }
         self._position_error_sum = torch.zeros(self.num_envs, device=self.device)
 
@@ -128,14 +141,35 @@ class TrackingEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._previous_actions = self._actions.clone()
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        motor_thrust = self._max_motor_thrust * (self._actions + 1.0) / 2.0
-        self._thrust[:, 0, 2] = motor_thrust.sum(dim=1)
-        self._moment[:, 0, :] = motor_thrust @ self._mixer.T
+        if self.cfg.action_mode == "body_rates":
+            self._desired_body_rate = self._actions[:, :3] * self._max_body_rate
+            self._collective_thrust = 4.0 * self._max_motor_thrust * (self._actions[:, 3] + 1.0) / 2.0
+        else:
+            self._set_motor_thrusts(self._max_motor_thrust * (self._actions + 1.0) / 2.0)
         # the reference this step is scored against is the one at the end of the step
         self._trajectory_time += self.step_dt
 
     def _apply_action(self):
+        # called at every physics step, so the rate controller runs at the physics rate
+        if self.cfg.action_mode == "body_rates":
+            self._run_rate_controller()
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
+
+    def _run_rate_controller(self):
+        """Mix the commanded collective thrust and the torque of a proportional rate controller into motor thrusts."""
+        body_rate = self._robot.data.root_ang_vel_b
+        angular_momentum = body_rate @ self._inertia.T
+        torque = (self._body_rate_gain * (self._desired_body_rate - body_rate)) @ self._inertia.T
+        torque += torch.linalg.cross(body_rate, angular_momentum)
+        motor_thrust = torch.cat([self._collective_thrust.unsqueeze(1), torque], dim=1) @ self._allocation_inverse.T
+        # as the firmware: lower all motors equally when one exceeds its maximum, which keeps the torque
+        excess = (motor_thrust.max(dim=1, keepdim=True).values - self._max_motor_thrust).clamp(min=0.0)
+        self._set_motor_thrusts((motor_thrust - excess).clamp(0.0, self._max_motor_thrust))
+
+    def _set_motor_thrusts(self, motor_thrust: torch.Tensor):
+        """Set the force and torque on the body from the four motor thrusts [N]."""
+        self._thrust[:, 0, 2] = motor_thrust.sum(dim=1)
+        self._moment[:, 0, :] = motor_thrust @ self._mixer.T
 
     def _get_observations(self) -> dict:
         robot_pos = self._robot.data.root_pos_w - self._terrain.env_origins
@@ -204,6 +238,10 @@ class TrackingEnv(DirectRLEnv):
         self._reference_vel = self._trajectory.velocity(self._trajectory_time)
         self.position_error = torch.linalg.norm(self._reference_pos - self._robot.data.root_pos_w, dim=1)
 
+    def _start_times(self, count: int) -> torch.Tensor:
+        """Reference times the episodes start at: a random point of the reference."""
+        return torch.rand(count, device=self.device) * self._trajectory.cfg.period
+
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
@@ -232,8 +270,7 @@ class TrackingEnv(DirectRLEnv):
 
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
-        # Start each episode at a random point of the reference
-        self._trajectory_time[env_ids] = torch.rand(len(env_ids), device=self.device) * self._trajectory.cfg.period
+        self._trajectory_time[env_ids] = self._start_times(len(env_ids))
         reference_pos = self._trajectory.position(self._trajectory_time[env_ids])
         # Reset robot state near the reference, level and at rest
         joint_pos = self._robot.data.default_joint_pos[env_ids]

@@ -14,6 +14,8 @@ Examples:
     python scripts/skrl/train.py --tasks circle rectangle figure8 --method scratch --headless
     # transfer methods
     python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe --headless
+    # policy acting at 30 Hz instead of 100 Hz
+    python scripts/skrl/train.py --tasks circle --method scratch --control_freq 30 --headless
     # continue a finished session with further tasks (same method)
     python scripts/skrl/train.py --tasks star vertical_circle --method kae_moe --headless \
         --resume logs/skrl/crazyflie_tracking/<session>
@@ -47,6 +49,12 @@ parser.add_argument(
 parser.add_argument("--env_id", type=str, default="CrazySim-Tracking-Direct-v0", help="Name of the gym environment.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment and the agent.")
+parser.add_argument(
+    "--control_freq",
+    type=float,
+    default=None,
+    help="Control rate [Hz] (environment steps per second). Default: 100, or the rate of the --resume session.",
+)
 parser.add_argument("--max_iterations", type=int, default=None, help="Training iterations per task.")
 parser.add_argument(
     "--checkpoint", type=str, default=None, help="Agent checkpoint to initialize the first task (finetune, scratch)."
@@ -108,7 +116,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import crazysim  # noqa: F401
 from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_policy, switch_task
 from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
-from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg
+from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg, control_frequency, set_control_frequency
 
 assert sorted(METHOD_NAMES) == sorted(METHODS), "METHOD_NAMES is out of sync with crazysim.methods.METHODS"
 
@@ -125,6 +133,20 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             raise ValueError(f"--resume session used method '{previous['method']}', not '{args_cli.method}'.")
         if args_cli.checkpoint:
             raise ValueError("--checkpoint cannot be combined with --resume.")
+        # sessions without the entry predate --control_freq and ran at 100 Hz
+        previous_frequency = previous.get("control_frequency", 100.0)
+        if args_cli.control_freq is None:
+            args_cli.control_freq = previous_frequency
+        elif abs(args_cli.control_freq - previous_frequency) > 1e-6:
+            raise ValueError(
+                f"--resume session ran at {previous_frequency} Hz, not --control_freq {args_cli.control_freq} Hz."
+            )
+        # sessions without the entry predate the body_rates action mode
+        previous_action_mode = previous.get("action_mode", "motor_thrusts")
+        if env_cfg.action_mode != previous_action_mode:
+            raise ValueError(
+                f"--resume session used env.action_mode={previous_action_mode}, not {env_cfg.action_mode}."
+            )
     # all tasks of the session, earlier ones (when resuming) included
     all_tasks = (previous["tasks"] if previous else []) + tasks
     unknown = [task for task in all_tasks if task not in env_cfg.tasks]
@@ -137,6 +159,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.task = tasks[0]
+    if args_cli.control_freq is not None:
+        set_control_frequency(env_cfg, args_cli.control_freq)
     if args_cli.max_iterations:
         agent_cfg["trainer"]["timesteps"] = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
     agent_cfg["trainer"]["close_environment_at_exit"] = False
@@ -159,6 +183,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         "tasks": all_tasks,
         "method": args_cli.method,
         "seed": agent_cfg["seed"],
+        "control_frequency": control_frequency(env_cfg),
+        "action_mode": env_cfg.action_mode,
         "command": " ".join(sys.orig_argv),
         "stages": list(previous["stages"]) if previous else [],
     }

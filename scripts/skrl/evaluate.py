@@ -21,6 +21,9 @@ parser.add_argument("--checkpoint", type=str, nargs="+", required=True, help="On
 parser.add_argument("--env_id", type=str, default="CrazySim-Tracking-Direct-v0", help="Name of the gym environment.")
 parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments (one episode each).")
 parser.add_argument("--seed", type=int, default=0, help="Seed used for the environment.")
+parser.add_argument(
+    "--control_freq", type=float, default=None, help="Control rate [Hz]; use the rate the policy was trained at. Default: the rate of the environment configuration."
+)
 parser.add_argument("--output", type=str, default=None, help="Path of a JSON file to write the results to.")
 
 # append AppLauncher cli args
@@ -49,7 +52,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import crazysim  # noqa: F401
 from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_policy, stage_dir_of
-from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg
+from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg, set_control_frequency
 
 
 @hydra_task_config(args_cli.env_id, "skrl_cfg_entry_point")
@@ -61,6 +64,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if args_cli.control_freq is not None:
+        set_control_frequency(env_cfg, args_cli.control_freq)
     env_cfg.seed = args_cli.seed
     env_cfg.debug_vis = False
 

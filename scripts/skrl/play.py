@@ -17,6 +17,9 @@ parser.add_argument("--task", type=str, default="circle", help="Task to fly, e.g
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a policy.pt file (or an agent checkpoint of an older run).")
 parser.add_argument("--env_id", type=str, default="CrazySim-Tracking-Direct-v0", help="Name of the gym environment.")
 parser.add_argument("--num_envs", type=int, default=16, help="Number of environments to simulate.")
+parser.add_argument(
+    "--control_freq", type=float, default=None, help="Control rate [Hz]; use the rate the policy was trained at. Default: the rate of the environment configuration."
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record a video instead of running forever.")
 parser.add_argument("--video_length", type=int, default=600, help="Length of the recorded video (in steps).")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
@@ -52,7 +55,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import crazysim  # noqa: F401
 from crazysim.evaluation import load_policy, stage_dir_of
-from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg
+from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg, set_control_frequency
 
 
 @hydra_task_config(args_cli.env_id, "skrl_cfg_entry_point")
@@ -60,6 +63,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     """Play with skrl agent."""
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if args_cli.control_freq is not None:
+        set_control_frequency(env_cfg, args_cli.control_freq)
     env_cfg.task = args_cli.task
     checkpoint = os.path.abspath(retrieve_file_path(args_cli.checkpoint))
 

@@ -2,9 +2,18 @@
 
 Isaac Lab tasks for training Crazyflie controllers and measuring how methods transfer between tasks.
 
-- **Robot**: Crazyflie 2.x (`CRAZYFLIE_CFG` from `isaaclab_assets`), 100 Hz control.
-- **Action**: four per-motor thrusts in `[-1, 1]`, mapped to `[0, f_max]` with `f_max = thrust_to_weight * weight / 4`.
-  The thrusts are converted to body force and torque with the motor mixing of the Crazyflie firmware
+- **Robot**: Crazyflie 2.x (`CRAZYFLIE_CFG` from `isaaclab_assets`), 100 Hz control (set with `--control_freq`).
+- **Action** (`action_mode` in the env configuration), four values in `[-1, 1]`:
+  - `body_rates` (default): `[desired roll rate, desired pitch rate, desired yaw rate, collective thrust]`. The rates
+    are about the body x, y, z axes and scaled by `max_body_rate` (6, 6, 3 rad/s); the thrust is mapped to
+    `[0, thrust_to_weight * weight]` (action 0 is 0.95 x weight). At every physics step a proportional rate controller
+    computes the torque `J K (ω_des - ω) + ω x J ω` (`J` inertia of the body, `K = body_rate_gain` = 40, 40, 20 1/s,
+    `ω` body rate), and thrust and torque are mixed into motor thrusts. When a motor would exceed its maximum, all four
+    are lowered equally, which keeps the torque and gives up thrust, as in the firmware.
+  - `motor_thrusts`: four per-motor thrusts mapped to `[0, f_max]` with `f_max = thrust_to_weight * weight / 4`.
+    Sessions before the `body_rates` mode used this; evaluate or play their policies with `env.action_mode=motor_thrusts`.
+
+  Motor thrusts are converted to body force and torque with the motor mixing of the Crazyflie firmware
   (`power_distribution_quadrotor.c`): motor order m1 front-right, m2 back-right, m3 back-left, m4 front-left;
   arm length 0.046 m; thrust-to-torque 0.005964552 m.
 - **Tasks**: follow a reference curve centered 1 m above the environment origin, in a horizontal plane unless stated.
@@ -129,6 +138,12 @@ Options:
   the meta learner, with its buffer of earlier-task states refilled by rolling out each stage's fast learner). A new
   session directory is created; its `session.json` lists the earlier stages too, and the earlier policies are
   evaluated on the new tasks to complete the transfer matrix.
+- `--control_freq HZ`: control rate, i.e. environment steps per second at which the policy acts (default 100).
+  The physics runs `ceil(200 / HZ)` steps per control step, so its rate stays at or above 200 Hz
+  (30 Hz control: 7 x 210 Hz physics). Times in seconds (episode length, trajectory period, reward per second) do
+  not change, but the rollout length (24 steps), the discount factor and the action-change penalty are per step.
+  Saved as `control_frequency` in `session.json` (with `action_mode`); `--resume` uses the session's rate. Pass the same value to
+  `evaluate.py` and `play.py`.
 - `--num_envs`, `--seed`, `--run_name`, `--no_eval`.
 - Hydra overrides for the env and agent configurations, e.g. `env.tasks.circle.radius=0.8 agent.agent.learning_rate=3e-4`.
 
@@ -162,6 +177,23 @@ To evaluate saved policies on any task list afterwards:
 ```bash
 python scripts/skrl/evaluate.py --headless --tasks circle rectangle figure8 \
     --checkpoint logs/skrl/crazyflie_tracking/<session>/*/policy.pt --output results.json
+```
+
+## Waypoint control
+
+`CrazySim-TrackingWaypoint-Direct-v0` duplicates the control scheme of `Drone_Test_TRO/examples/trajectory_setpoints`:
+the policy observes the relative positions of all setpoints and outputs a position command for a port of the Crazyflie
+firmware controller, instead of thrusts. Results and every difference from that repository are in
+[docs/waypoint_control_differences.md](docs/waypoint_control_differences.md).
+
+```bash
+python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method scratch \
+    --headless --no_eval --max_iterations 500
+STAGE=logs/skrl/crazyflie_tracking_waypoint/<session>/0_square
+python scripts/skrl/fit_kae.py --headless --task square --stage_dir $STAGE
+# artifacts for run.py of Drone_Test_TRO, in $STAGE/deploy
+python scripts/skrl/export_waypoint_artifacts.py --stage_dir $STAGE
+python -u scripts/skrl/validate_waypoint.py --headless --stage_dir $STAGE --tasks square --output validation.json
 ```
 
 ## Visualization

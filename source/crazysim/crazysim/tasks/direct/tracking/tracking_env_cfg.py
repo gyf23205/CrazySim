@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
@@ -41,7 +43,7 @@ class TrackingEnvCfg(DirectRLEnvCfg):
     state_space = 0
     debug_vis = True
 
-    # simulation (100 Hz control)
+    # simulation (100 Hz control, 200 Hz physics); change the control rate with set_control_frequency
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 200,
         render_interval=decimation,
@@ -75,9 +77,22 @@ class TrackingEnvCfg(DirectRLEnvCfg):
     # robot
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
-    # actuation: the policy outputs one thrust per motor. Motor order and the mixing constants
-    # follow the Crazyflie 2.x firmware (power_distribution_quadrotor.c):
-    # m1 front-right, m2 back-right, m3 back-left, m4 front-left.
+    # actuation. Motor order and the mixing constants follow the Crazyflie 2.x firmware
+    # (power_distribution_quadrotor.c): m1 front-right, m2 back-right, m3 back-left, m4 front-left.
+    action_mode: str = "body_rates"
+    """Meaning of the four actions, each in [-1, 1]:
+
+    - ``"body_rates"``: desired roll, pitch and yaw rates (about the body x, y, z axes, scaled by
+      ``max_body_rate``) and collective thrust (mapped to [0, ``thrust_to_weight`` * weight]). A rate
+      controller turns the rates into a torque at every physics step, and the torque and thrust are
+      mixed into motor thrusts.
+    - ``"motor_thrusts"``: one thrust per motor, mapped to [0, ``thrust_to_weight`` * weight / 4].
+    """
+    max_body_rate: tuple[float, float, float] = (6.0, 6.0, 3.0)
+    """Desired roll, pitch and yaw rates at action +1 [rad/s] (``"body_rates"`` mode)."""
+    body_rate_gain: tuple[float, float, float] = (40.0, 40.0, 20.0)
+    """Proportional gains of the rate controller [1/s]: torque = inertia * gain * rate error
+    + gyroscopic term (``"body_rates"`` mode)."""
     thrust_to_weight = 1.9
     """Maximum total thrust of the four motors divided by the robot weight."""
     arm_length = 0.046
@@ -113,3 +128,27 @@ class TrackingEnvCfg(DirectRLEnvCfg):
     ang_vel_reward_scale = -0.05
     yaw_reward_scale = -1.0
     action_rate_reward_scale = -0.1
+
+
+MIN_PHYSICS_FREQUENCY = 200.0
+"""Lowest physics rate that ``set_control_frequency`` allows [Hz]."""
+
+
+def set_control_frequency(cfg: TrackingEnvCfg, frequency: float):
+    """Set the control rate (environment steps per second, at which the policy acts) [Hz].
+
+    The physics runs the smallest whole number of steps per control step (``decimation``) that keeps
+    its rate at or above ``MIN_PHYSICS_FREQUENCY``, e.g. 100 Hz control: 2 x 200 Hz physics,
+    30 Hz control: 7 x 210 Hz physics. Times in seconds (episode length, trajectory period) and the
+    reward per second do not change.
+    """
+    if frequency <= 0.0:
+        raise ValueError(f"Control frequency must be positive, got {frequency}.")
+    cfg.decimation = max(1, math.ceil(MIN_PHYSICS_FREQUENCY / frequency - 1e-9))
+    cfg.sim.dt = 1.0 / (frequency * cfg.decimation)
+    cfg.sim.render_interval = cfg.decimation
+
+
+def control_frequency(cfg: TrackingEnvCfg) -> float:
+    """Control rate of a configuration [Hz]."""
+    return round(1.0 / (cfg.sim.dt * cfg.decimation), 6)
