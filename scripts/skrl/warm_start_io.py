@@ -369,7 +369,14 @@ def load_real_parent(path, method, target_shape, allow_kinematic=False):
         raise ValueError("Software-only parent lineage requires --allow-kinematic.")
     counters, budget = manifest["phase_counters"], manifest["budget"]
     rollout = bundle["agent_configuration"]["settings"].get("rollouts")
-    if (type(budget.get("accepted_transitions")) is not int or budget["accepted_transitions"] <= 0
+    if budget.get("completed_laps") is not None:
+        # Lap budget: one PPO update per finished lap, paused laps discarded.
+        if (type(budget["completed_laps"]) is not int or budget["completed_laps"] <= 0
+                or counters.get("completed_laps") != budget["completed_laps"]
+                or type(counters.get("complete_updates")) is not int
+                or not 0 < counters["complete_updates"] <= budget["completed_laps"]):
+            raise ValueError("Completed real parent has not reached its exact lap budget.")
+    elif (type(budget.get("accepted_transitions")) is not int or budget["accepted_transitions"] <= 0
             or counters["accepted_transitions"] != budget["accepted_transitions"]
             or type(rollout) is not int or rollout <= 0 or counters["accepted_transitions"] % rollout
             or counters["complete_updates"] != counters["accepted_transitions"] // rollout):
