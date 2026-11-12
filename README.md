@@ -196,6 +196,13 @@ python scripts/skrl/export_waypoint_artifacts.py --stage_dir $STAGE
 python -u scripts/skrl/validate_waypoint.py --headless --stage_dir $STAGE --tasks square --output validation.json
 ```
 
+## Simulation warm-up for real flights
+
+`train.py --warm_start` trains one shape for a fixed budget and writes the best checkpoint as a
+`transfer_bundle.pt` that `Drone_Test_TRO` continues on the real drone; the finalized real result starts the
+next shape (`--parent_bundle`). Commands and what crosses the handoff are in
+[docs/warm_start.md](docs/warm_start.md); the experiment is described in [PLAN.md](PLAN.md).
+
 ## Visualization
 
 ```bash

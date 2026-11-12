@@ -19,6 +19,14 @@ Examples:
     # continue a finished session with further tasks (same method)
     python scripts/skrl/train.py --tasks star vertical_circle --method kae_moe --headless \
         --resume logs/skrl/crazyflie_tracking/<session>
+    # simulation warm-up of one shape for a real flight (docs/warm_start.md): from the shared Square ...
+    python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe \
+        --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 \
+        --resume logs/skrl/crazyflie_tracking_waypoint/<square scratch session>
+    # ... or from the finalized real result of the previous shape
+    python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks triangle --method kae_moe \
+        --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 \
+        --parent_bundle <finalized circle real run>/transfer_bundle.pt
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -65,6 +73,21 @@ parser.add_argument(
     default=None,
     help="Session directory to continue: the method state after its last stage is restored and --tasks are trained "
     "as the next stages, in a new session directory.",
+)
+parser.add_argument(
+    "--warm_start",
+    action="store_true",
+    default=False,
+    help="Simulation warm-up of one task for a real flight: train --max_iterations, keep the best checkpoint and "
+    "write it as transfer_bundle.pt for Drone_Test_TRO. The steps that finish a task (KAE fit, FAME consolidation) "
+    "are left to the real stage. Start from the shared Square (--resume <scratch Square session>), from FAME's own "
+    "Square session (--resume), or from the previous real result (--parent_bundle).",
+)
+parser.add_argument(
+    "--parent_bundle",
+    type=str,
+    default=None,
+    help="With --warm_start: finalized transfer_bundle.pt of the previous shape's real stage (same method).",
 )
 parser.add_argument("--run_name", type=str, default=None, help="Suffix of the session directory name.")
 parser.add_argument("--no_eval", action="store_true", default=False, help="Skip the evaluation after each task.")
@@ -116,6 +139,15 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import crazysim  # noqa: F401
 from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_policy, switch_task
 from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
+from crazysim.transfer_bundle import SHAPES, read_bundle
+from crazysim.warm_start import (
+    SHARED_SQUARE_METHODS,
+    check_parent_bundle,
+    finish_warm_stage,
+    seed_from_bundle,
+    seed_from_square,
+    track_fame_training_state,
+)
 from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg, control_frequency, set_control_frequency
 
 assert sorted(METHOD_NAMES) == sorted(METHODS), "METHOD_NAMES is out of sync with crazysim.methods.METHODS"
@@ -126,11 +158,36 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     """Train on every task of the sequence with the selected method."""
     tasks = args_cli.tasks
     previous = None
+    shared_square = False
+    """The session starts from a Square that was trained with ``--method scratch`` (warm-up only)."""
+    parent_bundle = None
+    if args_cli.warm_start and len(tasks) != 1:
+        raise ValueError("--warm_start trains exactly one task.")
+    if args_cli.parent_bundle:
+        if not args_cli.warm_start or args_cli.resume or args_cli.checkpoint:
+            raise ValueError("--parent_bundle needs --warm_start and cannot be combined with --resume or --checkpoint.")
+        parent_bundle = read_bundle(args_cli.parent_bundle)
+        check_parent_bundle(parent_bundle, args_cli.method, tasks[0])
     if args_cli.resume:
         with open(os.path.join(args_cli.resume, "session.json")) as f:
             previous = json.load(f)
+        if previous.get("warm_start"):
+            raise ValueError(
+                "--resume session is a simulation warm-up, which does not finish its task. The next task starts from "
+                "the finalized real result (--parent_bundle)."
+            )
         if previous["method"] != args_cli.method:
-            raise ValueError(f"--resume session used method '{previous['method']}', not '{args_cli.method}'.")
+            shared_square = (
+                args_cli.warm_start
+                and previous["method"] == "scratch"
+                and args_cli.method in SHARED_SQUARE_METHODS
+                and len(previous["stages"]) == 1
+            )
+            if not shared_square:
+                raise ValueError(
+                    f"--resume session used method '{previous['method']}', not '{args_cli.method}'. Only a warm-up "
+                    f"(--warm_start) of {', '.join(SHARED_SQUARE_METHODS)} can start from a one-stage scratch session."
+                )
         if args_cli.checkpoint:
             raise ValueError("--checkpoint cannot be combined with --resume.")
         # sessions without the entry predate --control_freq and ran at 100 Hz
@@ -154,6 +211,15 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")
     if args_cli.checkpoint and args_cli.method not in ("finetune", "scratch"):
         raise ValueError("--checkpoint is only supported by the finetune and scratch methods.")
+    if args_cli.warm_start:
+        if getattr(env_cfg, "action_mode", None) != "relative_waypoint":
+            raise ValueError(
+                "--warm_start needs the waypoint environment: --env_id CrazySim-TrackingWaypoint-Direct-v0."
+            )
+        if tasks[0] not in SHAPES:
+            raise ValueError(f"Drone_Test_TRO has no shape '{tasks[0]}'; --warm_start supports {', '.join(SHAPES)}.")
+        if args_cli.method == "scratch":
+            raise ValueError("--warm_start is for finetune, residual, componet, kae_moe and fame.")
 
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -164,6 +230,11 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     if args_cli.max_iterations:
         agent_cfg["trainer"]["timesteps"] = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
     agent_cfg["trainer"]["close_environment_at_exit"] = False
+    if METHODS[args_cli.method].reuses_policies and agent_cfg["agent"].get("state_preprocessor"):
+        # frozen policies of earlier stages take raw observations and keep their own normalizer
+        print(f"[INFO] Method '{args_cli.method}' reuses frozen policies: observation normalization is turned off.")
+        agent_cfg["agent"]["state_preprocessor"] = None
+        agent_cfg["agent"]["state_preprocessor_kwargs"] = None
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -190,6 +261,15 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     }
     if previous:
         session["resumed_from"] = os.path.abspath(args_cli.resume)
+    if args_cli.warm_start:
+        session["warm_start"] = True
+    if parent_bundle:
+        session["parent_bundle"] = {
+            "path": os.path.abspath(args_cli.parent_bundle),
+            "artifact_id": parent_bundle["manifest"]["artifact_id"],
+            "shape": parent_bundle["manifest"]["shape"],
+            "phase": parent_bundle["manifest"]["phase"],
+        }
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = session_dir
@@ -215,7 +295,10 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     results = {}
     if previous:
         print(f"[INFO] Resuming after stage {previous['stages'][-1]['stage']} of {args_cli.resume}")
-        method.resume(previous["stages"])
+        if shared_square:
+            seed_from_square(method, previous["stages"][-1])
+        else:
+            method.resume(previous["stages"])
         results = {stage: dict(row) for stage, row in previous.get("transfer", {}).items()}
         if not args_cli.no_eval:
             # complete the earlier rows of the transfer matrix with the new tasks
@@ -228,21 +311,41 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             transfer_writer.flush()
             session["transfer"] = results
     first_index = len(session["stages"])
+    if parent_bundle:
+        print(f"[INFO] Starting from the {parent_bundle['manifest']['shape']} real result {args_cli.parent_bundle}")
+        seed_from_bundle(method, parent_bundle, tasks[0], os.path.join(session_dir, "parent"))
+        # the stage index counts the earlier shapes: FAME treats stage 0 as its first task
+        first_index = SHAPES.index(parent_bundle["manifest"]["shape"]) + 1
     for index, task in enumerate(tasks, start=first_index):
         stage = f"{index}_{task}"
         stage_dir = os.path.join(session_dir, stage)
-        print(f"\n[INFO] Stage {index + 1}/{len(all_tasks)}: training on '{task}' ({args_cli.method})")
+        print(f"\n[INFO] Stage {index + 1}/{first_index + len(tasks)}: training on '{task}' ({args_cli.method})")
         start_time = time.time()
         switch_task(env, task)
 
         agent = method.start_stage(index, task, stage_dir)
+        if args_cli.warm_start and args_cli.method == "fame":
+            track_fame_training_state(agent)
         SequentialTrainer(env=env, agents=agent, cfg=trainer_cfg).train()
         os.makedirs(os.path.join(stage_dir, "checkpoints"), exist_ok=True)
         agent.save(os.path.join(stage_dir, FINAL_CHECKPOINT))
         if getattr(agent, "writer", None) is not None:
             agent.writer.close()
 
-        policy = method.end_stage(index, task, stage_dir, agent).eval()
+        warm_info = {}
+        if args_cli.warm_start:
+            policy, warm_info = finish_warm_stage(
+                method,
+                agent,
+                stage_dir,
+                task,
+                env_cfg,
+                budget_iterations=agent_cfg["trainer"]["timesteps"] // agent_cfg["agent"]["rollouts"],
+                parent=parent_bundle,
+                parent_square=os.path.dirname(previous["stages"][-1]["policy"]) if shared_square else None,
+            )
+        else:
+            policy = method.end_stage(index, task, stage_dir, agent).eval()
         torch.save(policy, os.path.join(stage_dir, POLICY_FILE))
         stage_info = {
             "stage": stage,
@@ -254,6 +357,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         if getattr(agent, "detection", None):
             stage_info["detection"] = agent.detection
         stage_info.update(method.stage_info)
+        stage_info.update(warm_info)
         session["stages"].append(stage_info)
 
         if not args_cli.no_eval:

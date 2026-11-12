@@ -83,3 +83,52 @@ kae:
   kae_coefficient: 0.1
   action_coefficient: 0.9
   seed: 777
+
+# Transfer methods on the waypoint task. The sizes are those of skrl_ppo_cfg.yaml, which Drone_Test_TRO
+# requires for a simulation-to-real handoff (TRANSFER_BUNDLE.md there). The KAE settings repeat the kae
+# block above: input 56 + 1, hidden size 64.
+methods:
+  residual:
+    hidden_dims: [256, 128, 64]  # residual network
+  componet:
+    internal_hidden_dims: [256, 128, 64]  # internal policy; the first entry is also the attention dimension
+  kae_moe:
+    padded_dim: 57
+    observable_dim: 16
+    p: 1
+    residual_hidden_dims: [256, 128, 64]  # MLP pathway
+    weight_hidden_dims: [32]  # per-KAE mode-weight networks
+    router_hidden_dims: [128]  # router between KAEs
+    gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
+    kae:
+      observation_samples: 30000
+      hidden_dim: 64
+      sample_count: 15000
+      batch_size: 2048
+      epochs: 7500
+      learning_rate: 1.0e-04
+      kae_coefficient: 0.1
+      action_coefficient: 0.9
+      seed: 777
+  fame:  # own PPO variant; rollout length taken from agent: rollouts. Values of skrl_ppo_cfg.yaml.
+    hidden_dims: [256, 128, 64]
+    lr_actor: 3.0e-04
+    lr_critic: 1.0e-03
+    lr_meta: 1.0e-03
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_ratio: 0.2
+    value_coef: 1.0
+    grad_norm_clip: 1.0
+    init_temperature: 0.1
+    alpha_lr: 1.0e-04
+    target_entropy: null  # null: -action_dim
+    ppo_epochs: 5
+    num_mini_batches: 4
+    mini_batch_size: 4096
+    rewards_shaper_scale: 1.0
+    size_fast2meta: 100000  # most recent states of the current task used for distillation
+    size_meta: 500000  # states of earlier tasks
+    detection_steps: 1000  # steps per candidate when choosing the initial actor of a task
+    epoch_meta: 200
+    meta_lr_scheduler_gamma: 0.95
