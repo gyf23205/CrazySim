@@ -8,6 +8,7 @@ import copy
 import importlib.util
 import math
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import gymnasium as gym
@@ -151,6 +152,18 @@ def finished_stage(method, env, tmp_path, name, task="square") -> dict:
             "checkpoint": str(stage_dir / FINAL_CHECKPOINT), **method.stage_info}  # fmt: skip
 
 
+def seed_square(method, stage) -> dict:
+    """Start ``method`` from the files of a finished Square stage, as the ``--square_...`` options do."""
+    stage_dir = Path(stage["policy"]).parent
+    if method.name == "fame":
+        files = {"policy": stage["policy"], "meta_policy": stage_dir / "meta_policy.pt"}
+    elif method.name == "kae_moe":
+        files = {"kae": stage_dir / "kae" / "kae.pt"}
+    else:
+        files = {"checkpoint": stage["selected_checkpoint"]}
+    return ws.seed_from_square(method, **{name: str(path) for name, path in files.items()})
+
+
 def warm_up(method, env, tmp_path, task, index, **parents):
     """One warm-up stage as scripts/skrl/train.py --warm_start runs it."""
     stage_dir = tmp_path / f"warm_{task}" / f"{index}_{task}"
@@ -186,7 +199,7 @@ def check_real_import(real, method_name, agent, policy, info, task):
     assert bundle["manifest"]["phase"] == "simulation"
     assert bundle["manifest"]["checkpoint_selection"]["actual_iteration"] == info["selected_iteration"] <= 2
     target = real._agent(method_name, bundle)
-    real.restore_transfer_agent(target, bundle)
+    transfer = real.restore_transfer_agent(target, bundle)
 
     states = torch.randn(9, 56)
     ours = simulation_distribution(method_name, agent, states)
@@ -202,10 +215,13 @@ def check_real_import(real, method_name, agent, policy, info, task):
         torch.testing.assert_close(target.memory_meta.all(), agent.meta_buffer.all())
         torch.testing.assert_close(target.log_alpha, agent.log_alpha)
     else:
-        optimizer = target.optimizer
-        assert optimizer.param_groups[0]["lr"] == pytest.approx(info["learning_rate_at_selection"])
-        assert type(target.scheduler).__name__ == "KLAdaptiveLR"
-        assert target.scheduler.kl_threshold == pytest.approx(0.016) and target.scheduler.max_lr == pytest.approx(1e-3)
+        # the bundle records the adaptive schedule and the rate the simulation reached, but the real phase
+        # trains at its own rate with its own schedule (one lap per update is too little data for the former)
+        assert bundle["agent_configuration"]["scheduler"]["kind"] == "KLAdaptiveLR"
+        assert bundle["manifest"]["learning_rate_at_selection"] == pytest.approx(info["learning_rate_at_selection"])
+        assert type(target.scheduler).__name__ == "ExponentialLR"
+        assert target.optimizer.param_groups[0]["lr"] == pytest.approx(target.cfg["learning_rate"])
+        assert "learning_rate_schedule" in transfer["resets"]
 
     before = copy.deepcopy(target.models["policy"].state_dict())
     for step in range(ROLLOUTS):
@@ -234,11 +250,12 @@ def test_circle_warm_up_from_shared_square_continues_on_the_real_side(real, squa
     torch.manual_seed(11)
     env = TensorEnv()
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
-    ws.seed_from_square(method, square_stage)
-    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square="square_scratch/0_square")
+    files = seed_square(method, square_stage)
+    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
     bundle, target = check_real_import(real, method_name, agent, policy, info, "circle")
 
-    assert bundle["manifest"]["parent"] is None and bundle["manifest"]["simulation_parent"]["shape"] == "square"
+    assert bundle["manifest"]["parent"] is None
+    assert bundle["manifest"]["simulation_parent"] == {"shape": "square", "files": files}
     states = torch.randn(5, 56)
     square = ws.controller_from_node(
         ws.ppo_controller_node(torch.load(square_stage["selected_checkpoint"], weights_only=False))
@@ -391,15 +408,18 @@ def test_bundle_checksum_and_parent_checks(real, square_stage, tmp_path):
     torch.manual_seed(19)
     env = TensorEnv()
     method = METHODS["residual"](env, agent_cfg("residual"), str(tmp_path))
-    ws.seed_from_square(method, square_stage)
+    seed_square(method, square_stage)
     _, _, info = warm_up(method, env, tmp_path, "circle", 1)
     bundle = tb.read_bundle(info["transfer_bundle"])
     unsealed = {key: value for key, value in bundle.items() if key != "_source"}
     assert tb.digest(unsealed) == real._digest(unsealed)
     with pytest.raises(ValueError, match="finished real stage"):
         ws.check_parent_bundle(bundle, "residual", "triangle")  # a warm-up is not a parent
-    with pytest.raises(ValueError, match="trains its own first stage"):
-        ws.seed_from_square(METHODS["fame"](env, agent_cfg("fame"), str(tmp_path)), square_stage)
+    with pytest.raises(ValueError, match="--square_policy, --square_meta_policy"):  # FAME has its own Square
+        fame = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+        ws.seed_from_square(fame, checkpoint=square_stage["selected_checkpoint"])
+    with pytest.raises(FileNotFoundError, match="--square_checkpoint"):
+        ws.seed_from_square(method, checkpoint=str(tmp_path / "missing.pt"))
     bundle["manifest"]["shape"] = "triangle"
     torch.save({key: value for key, value in bundle.items() if key != "_source"}, tmp_path / "changed.pt")
     with pytest.raises(ValueError, match="checksum"):
@@ -413,9 +433,9 @@ def test_chain_square_circle_real_triangle_real(real, square_stage, tmp_path, me
     env = TensorEnv()
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
     if method_name == "fame":
-        method.resume([finished_stage(method, env, tmp_path, "square_fame")])
+        seed_square(method, finished_stage(method, env, tmp_path, "square_fame"))
     else:
-        ws.seed_from_square(method, square_stage)
+        seed_square(method, square_stage)
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1)
     circle, target = check_real_import(real, method_name, agent, policy, info, "circle")  # one real update included
 
@@ -423,8 +443,8 @@ def test_chain_square_circle_real_triangle_real(real, square_stage, tmp_path, me
         target.games, target.flag_reg = ["square", "circle"], ["Initial", agent.detection["choice"]]
     parent = finalize_real_stage(real, target, method_name, "circle", "triangle", tmp_path)
     assert parent["manifest"]["parent"]["artifact_id"] == circle["manifest"]["artifact_id"]
-    if method_name != "fame":  # the real side writes the adaptive schedule back
-        assert parent["agent_configuration"]["scheduler"]["kind"] == "KLAdaptiveLR"
+    if method_name != "fame":  # the real side records the schedule it ran, which is its own
+        assert parent["agent_configuration"]["scheduler"]["kind"] == "ExponentialLR"
 
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
     ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
@@ -455,7 +475,7 @@ def test_the_best_checkpoint_within_the_budget_is_handed_over(real, square_stage
     if method_name == "fame":
         method.resume([finished_stage(method, env, tmp_path, "square_fame")])
     else:
-        ws.seed_from_square(method, square_stage)
+        seed_square(method, square_stage)
     env.penalty_after = env.steps + ROLLOUTS  # counted from here: detection steps of FAME come first
     if method_name == "fame":
         env.penalty_after += 2 * 4  # two candidates, detection_steps each
