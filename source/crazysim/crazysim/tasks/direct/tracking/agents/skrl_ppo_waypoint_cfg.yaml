@@ -1,5 +1,22 @@
 seed: 42
 
+# SQUARE=logs/skrl/crazyflie_tracking_waypoint/2026-11-12_17-11-32_scratch_square 
+# python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe --headless --no_eval --warm_start --max_iterations 240 env.trajectory_laps=1 --resume $SQUARE
+# python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square circle triangle figure8 --method kae_moe --headless --seed 42 --run_name crl_cmp env.trajectory_laps=1 --max_iterations 500
+
+# 1. Square scratch
+# python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method scratch --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 
+
+# 2. SQUARE=logs/skrl/crazyflie_tracking_waypoint/2026-11-12_17-11-32_scratch_square 
+
+# 3. FAME 
+# python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle triangle figure8 --method fame --headless --no_eval --max_iterations 500 env.trajectory_laps=1 --resume $SQUARE
+
+# 4. KAE-MoE
+# python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle triangle figure8 --method kae_moe --headless --no_eval --max_iterations 500 env.trajectory_laps=1 --resume $SQUARE
+
+
+
 # Same models as the scratch PPO of Drone_Test_TRO (BoundedScratchPolicy, BoundedValue): tanh-squashed Gaussian
 # policy with a state-independent noise, separate value network, running normalization of the observations.
 models:
@@ -77,7 +94,7 @@ kae:
   observation_samples: 30000
   hidden_dim: 64
   sample_count: 15000
-  batch_size: 2048
+  batch_size: 1024 #2048
   epochs: 7500
   learning_rate: 1.0e-04
   kae_coefficient: 0.1
@@ -94,17 +111,17 @@ methods:
     internal_hidden_dims: [256, 128, 64]  # internal policy; the first entry is also the attention dimension
   kae_moe:
     padded_dim: 57
-    observable_dim: 16
+    observable_dim: 8 #16
     p: 1
     residual_hidden_dims: [256, 128, 64]  # MLP pathway
     weight_hidden_dims: [32]  # per-KAE mode-weight networks
-    router_hidden_dims: [128]  # router between KAEs
+    router_hidden_dims: [64] #[128]  # router between KAEs
     gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
     kae:
       observation_samples: 30000
-      hidden_dim: 64
+      hidden_dim: 64 #64
       sample_count: 15000
-      batch_size: 2048
+      batch_size: 1024 #2048
       epochs: 7500
       learning_rate: 1.0e-04
       kae_coefficient: 0.1
@@ -125,7 +142,7 @@ methods:
     target_entropy: null  # null: -action_dim
     ppo_epochs: 5
     num_mini_batches: 4
-    mini_batch_size: 4096
+    mini_batch_size: 1024 #4096
     rewards_shaper_scale: 1.0
     size_fast2meta: 100000  # most recent states of the current task used for distillation
     size_meta: 500000  # states of earlier tasks
