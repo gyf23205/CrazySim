@@ -22,7 +22,7 @@ Examples:
     # simulation warm-up of one shape for a real flight (docs/warm_start.md): from the shared Square ...
     python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe \
         --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 \
-        --resume logs/skrl/crazyflie_tracking_waypoint/<square scratch session>
+        --square_kae logs/skrl/crazyflie_tracking_waypoint/<square scratch session>/0_square/kae/kae.pt
     # ... or from the finalized real result of the previous shape
     python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks triangle --method kae_moe \
         --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 \
@@ -80,8 +80,30 @@ parser.add_argument(
     default=False,
     help="Simulation warm-up of one task for a real flight: train --max_iterations, keep the best checkpoint and "
     "write it as transfer_bundle.pt for Drone_Test_TRO. The steps that finish a task (KAE fit, FAME consolidation) "
-    "are left to the real stage. Start from the shared Square (--resume <scratch Square session>), from FAME's own "
-    "Square session (--resume), or from the previous real result (--parent_bundle).",
+    "are left to the real stage. Start from the files of a Square stage (--square_...) or from the previous real "
+    "result (--parent_bundle).",
+)
+parser.add_argument(
+    "--square_checkpoint",
+    type=str,
+    default=None,
+    help="With --warm_start of finetune, residual or componet: checkpoints/best_agent.pt of the Square trained with "
+    "--method scratch.",
+)
+parser.add_argument(
+    "--square_kae",
+    type=str,
+    default=None,
+    help="With --warm_start of kae_moe: kae/kae.pt that scripts/skrl/fit_kae.py fitted to the scratch Square.",
+)
+parser.add_argument(
+    "--square_policy", type=str, default=None, help="With --warm_start of fame: policy.pt of FAME's own Square stage."
+)
+parser.add_argument(
+    "--square_meta_policy",
+    type=str,
+    default=None,
+    help="With --warm_start of fame: meta_policy.pt of FAME's own Square stage.",
 )
 parser.add_argument(
     "--parent_bundle",
@@ -141,7 +163,6 @@ from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_poli
 from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
 from crazysim.transfer_bundle import SHAPES, read_bundle
 from crazysim.warm_start import (
-    SHARED_SQUARE_METHODS,
     check_parent_bundle,
     finish_warm_stage,
     seed_from_bundle,
@@ -158,11 +179,20 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     """Train on every task of the sequence with the selected method."""
     tasks = args_cli.tasks
     previous = None
-    shared_square = False
-    """The session starts from a Square that was trained with ``--method scratch`` (warm-up only)."""
+    square_files = {
+        name: getattr(args_cli, f"square_{name}")
+        for name in ("checkpoint", "kae", "policy", "meta_policy")
+        if getattr(args_cli, f"square_{name}")
+    }
+    """Files of the Square stage a warm-up starts from (``--square_...``)."""
     parent_bundle = None
     if args_cli.warm_start and len(tasks) != 1:
         raise ValueError("--warm_start trains exactly one task.")
+    if square_files and (not args_cli.warm_start or args_cli.resume or args_cli.parent_bundle or args_cli.checkpoint):
+        raise ValueError(
+            "--square_... options need --warm_start and cannot be combined with --resume, --parent_bundle or "
+            "--checkpoint."
+        )
     if args_cli.parent_bundle:
         if not args_cli.warm_start or args_cli.resume or args_cli.checkpoint:
             raise ValueError("--parent_bundle needs --warm_start and cannot be combined with --resume or --checkpoint.")
@@ -177,17 +207,10 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
                 "the finalized real result (--parent_bundle)."
             )
         if previous["method"] != args_cli.method:
-            shared_square = (
-                args_cli.warm_start
-                and previous["method"] == "scratch"
-                and args_cli.method in SHARED_SQUARE_METHODS
-                and len(previous["stages"]) == 1
+            raise ValueError(
+                f"--resume session used method '{previous['method']}', not '{args_cli.method}'. A warm-up starts "
+                "from the files of the Square stage (--square_...)."
             )
-            if not shared_square:
-                raise ValueError(
-                    f"--resume session used method '{previous['method']}', not '{args_cli.method}'. Only a warm-up "
-                    f"(--warm_start) of {', '.join(SHARED_SQUARE_METHODS)} can start from a one-stage scratch session."
-                )
         if args_cli.checkpoint:
             raise ValueError("--checkpoint cannot be combined with --resume.")
         # sessions without the entry predate --control_freq and ran at 100 Hz
@@ -205,7 +228,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
                 f"--resume session used env.action_mode={previous_action_mode}, not {env_cfg.action_mode}."
             )
     # all tasks of the session, earlier ones (when resuming) included
-    all_tasks = (previous["tasks"] if previous else []) + tasks
+    all_tasks = (previous["tasks"] if previous else ["square"] if square_files else []) + tasks
     unknown = [task for task in all_tasks if task not in env_cfg.tasks]
     if unknown:
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")
@@ -295,10 +318,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     results = {}
     if previous:
         print(f"[INFO] Resuming after stage {previous['stages'][-1]['stage']} of {args_cli.resume}")
-        if shared_square:
-            seed_from_square(method, previous["stages"][-1])
-        else:
-            method.resume(previous["stages"])
+        method.resume(previous["stages"])
         results = {stage: dict(row) for stage, row in previous.get("transfer", {}).items()}
         if not args_cli.no_eval:
             # complete the earlier rows of the transfer matrix with the new tasks
@@ -311,6 +331,10 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             transfer_writer.flush()
             session["transfer"] = results
     first_index = len(session["stages"])
+    if square_files:
+        session["square"] = seed_from_square(method, **square_files)
+        print(f"[INFO] Starting from the Square: {session['square']}")
+        first_index = 1  # the Square is stage 0: FAME treats stage 0 as its first task
     if parent_bundle:
         print(f"[INFO] Starting from the {parent_bundle['manifest']['shape']} real result {args_cli.parent_bundle}")
         seed_from_bundle(method, parent_bundle, tasks[0], os.path.join(session_dir, "parent"))
@@ -342,7 +366,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
                 env_cfg,
                 budget_iterations=agent_cfg["trainer"]["timesteps"] // agent_cfg["agent"]["rollouts"],
                 parent=parent_bundle,
-                parent_square=os.path.dirname(previous["stages"][-1]["policy"]) if shared_square else None,
+                parent_square=session.get("square"),
             )
         else:
             policy = method.end_stage(index, task, stage_dir, agent).eval()

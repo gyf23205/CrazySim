@@ -47,15 +47,32 @@ FAME_SQUARE=logs/skrl/crazyflie_tracking_waypoint/<fame session>
 
 ## Step 1: warm-up of the first new shape
 
-`--resume` names the session the method starts from: the shared Square session for four methods, FAME's
-own session for FAME. The budget is `--max_iterations`.
+The `--square_...` options name the exact files of the Square stage a method starts from. The budget is
+`--max_iterations`.
+
+| Method | Options | File |
+| --- | --- | --- |
+| `finetune`, `residual`, `componet` | `--square_checkpoint` | `checkpoints/best_agent.pt` of the shared Square |
+| `kae_moe` | `--square_kae` | `kae/kae.pt` of the shared Square, written by `fit_kae.py` |
+| `fame` | `--square_policy`, `--square_meta_policy` | `policy.pt` and `meta_policy.pt` of FAME's own Square |
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe \
-    --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 --resume $SQUARE
+    --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 \
+    --square_kae $SQUARE/0_square/kae/kae.pt
+# the same for residual and componet
+python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method finetune \
+    --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 \
+    --square_checkpoint $SQUARE/0_square/checkpoints/best_agent.pt
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method fame \
-    --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 --resume $FAME_SQUARE
+    --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 \
+    --square_policy $FAME_SQUARE/0_square/policy.pt --square_meta_policy $FAME_SQUARE/0_square/meta_policy.pt
 ```
+
+A method refuses the options of another method and a path that is not a file. The files that were read are
+recorded as `square` in `session.json` and as `simulation_parent` in the bundle. The control rate is not
+checked against the Square's session, as `--resume` would: pass the same `--control_freq` if the Square
+used one.
 
 The **pilot** that chooses the budget is the same KAE-MoE command with a long budget. Read its training
 curves in TensorBoard (`<session>/<stage>`), choose the budget, and rerun all five methods with it.
@@ -96,6 +113,10 @@ python examples/setpoint/finalize_stage.py --source-run <real run> --output-dir 
 For KAE-MoE's later stages the list grows by one file per finished shape: the Square file first, then
 `<circle finalized>/kae/kae.pth`, and so on.
 
+Each run flies one frozen evaluation lap before training and lands, then trains, then evaluates the new
+shape and every earlier shape. Add `--skip-initial-evaluation` to start with training; the run then has no
+measurement of the handed-over learner on the drone.
+
 With the simulation's command bounds, the real command clamp no longer keeps commands above 0.25 m. The
 real height crash check (below 0.10 m) and the XY geofence still apply.
 
@@ -125,11 +146,14 @@ A new shape in simulation uses each method's own behaviour: Residual, CompoNet a
 new critic and new action noise, PPO fine-tuning continues everything, and FAME tests a fresh actor
 against its meta actor.
 
-**Learning rate.** The current rate travels in the optimizer state, and the bundle records the
-KL-adaptive schedule. The real stage starts at the rate the simulation had reached and keeps adapting it
-between 1e-6 and 1e-3. It does not use the default of `Drone_Test_TRO` (3e-5 with exponential decay).
-PPO fine-tuning brings the real stage's final rate back to simulation; the other methods start each shape
-with a new optimizer. FAME has fixed rates.
+**Learning rate.** The bundle records the KL-adaptive schedule and the rate the simulation had reached,
+but the real stage does not use them. It trains at the rate and schedule of `Drone_Test_TRO` (3e-5 with
+exponential decay, factor 0.9995 per epoch) and keeps the simulation's optimizer moments. The first real
+Circle run of KAE-MoE used the simulation's rate (1e-3, the schedule's cap) and its tracking degraded
+within seven laps: one lap per update is too little data for that step size. PPO fine-tuning brings the
+real stage's final rate back to simulation, where the adaptive schedule raises it again within a few
+updates; the other methods start each shape with a new optimizer. FAME has fixed rates of its own on both
+sides.
 
 **Observation normalization.** PPO fine-tuning normalizes observations and keeps updating the statistics.
 Residual, CompoNet and KAE-MoE do not: their frozen earlier policies take raw observations and keep their
@@ -159,7 +183,7 @@ is not covered, since it needs Isaac Sim.
 
 | File | Role |
 | --- | --- |
-| [scripts/skrl/train.py](../scripts/skrl/train.py) | `--warm_start`, `--parent_bundle`, start from the shared Square |
+| [scripts/skrl/train.py](../scripts/skrl/train.py) | `--warm_start`, `--parent_bundle`, `--square_...` |
 | [crazysim/warm_start.py](../source/crazysim/crazysim/warm_start.py) | Translation between the methods here and the bundle |
 | [crazysim/transfer_bundle.py](../source/crazysim/crazysim/transfer_bundle.py) | Reading, checking and writing the bundle file |
 | [skrl_ppo_waypoint_cfg.yaml](../source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml) | Method settings for the waypoint task |

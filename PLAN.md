@@ -69,7 +69,7 @@ Each method keeps its own history. No method ever starts from another method's r
 | Simulation runner | Edit Yifan's `train.py` | This is a branch; least code |
 | Checkpoint handed over | Best training-return checkpoint within the budget (Yifan's rule), then skip the rest of `end_stage` | Protects against stopping in a bad stretch; the stage is only finished after the real flight |
 | Real-side checkpoint | Exact final, as `Drone_Test_TRO` does now | A few real laps are too little data to pick a best checkpoint |
-| Learning rate on the real drone | Inherit the simulation's rate and Yifan's KL-adaptive schedule | Same learner continues under the same rule; the schedule limits itself |
+| Learning rate on the real drone | The real repository's own rate and schedule (3e-5, exponential decay); changed on 2026-11-13 | Inheriting the simulation's rate (1e-3) degraded KAE-MoE within seven real laps |
 | Budget choice | Manual review of the KAE-MoE pilot; no automation | Decided by Woojun |
 | Flight gate | None | The real runtime's 1 m abort and geofence are the protection |
 | Square | Train fresh with Yifan's code | Gives a full stage folder (critic, optimizer, normalizers), not a deployment-only file |
@@ -136,7 +136,9 @@ In order. Items 1 and 2 need no new code for the shared Square, so they can star
 3. **Start a method from the shared Square.** `--resume` refuses a session trained with a
    different method. Allow KAE-MoE, Residual, CompoNet and PPO fine-tuning to start from the
    scratch Square stage. CompoNet needs the Square policy wrapped as its first unit, normalizer
-   included.
+   included. As built (November 14, 2026): the start is named by exact files, `--square_checkpoint`
+   or `--square_kae`, not by `--resume` of the Square session; FAME takes `--square_policy` and
+   `--square_meta_policy` of its own Square.
 4. **Warm-up mode in `train.py`.** One flag: train for the budget, load the best checkpoint,
    export, skip the rest of `end_stage`. Record the budget and the selected iteration. Save a
    deterministic `policy.pt` so Yifan's validation script still works. Turn observation
@@ -206,13 +208,17 @@ Read-only checks of `Drone_Test_TRO` at commit `44d47ba`. Two passed and two nee
 
 ### Decisions these checks leave open
 
-- **Learning rate on the real drone: decided, inherit the simulation's rate and its adaptive
-  schedule.** The bundle carries the optimizer state of the selected checkpoint and Yifan's
-  KL-adaptive schedule with its settings (target 0.016, maximum 1e-3). The real stage starts at
-  the rate simulation had reached and keeps adapting it after every update, as simulation does.
-  This needs a small edit to `Drone_Test_TRO` (see its work list below). The starting value can
-  differ between methods, so report it, and the rate at the end of the real stage, for every
-  method and shape. FAME uses its own fixed rates in both repositories and is unaffected.
+- **Learning rate on the real drone: changed on 2026-11-13 to the real repository's own rate and
+  schedule.** The first decision was to inherit the simulation's rate and Yifan's KL-adaptive
+  schedule (target 0.016, maximum 1e-3). The first real Circle run of KAE-MoE did that, at 1e-3,
+  and degraded within seven laps (reward 171 to 110, RMSE 16 cm to 30 cm, policy weights moved by
+  about a quarter of their size). The Square real run of 2026-11-12 at about 1e-4 with exponential
+  decay stayed flat. The bundle still records the adaptive schedule and the rate simulation had
+  reached, but the real stage of the four PPO methods now trains at 3e-5 with exponential decay
+  (factor 0.9995 per epoch), keeping the simulation's optimizer moments. The edit is in
+  `Drone_Test_TRO` (`real_schedule_replaces` in `examples/setpoint/transfer_bundle.py`); the run
+  records it as the reset `learning_rate_schedule`. FAME uses its own fixed rates in both
+  repositories and is unaffected. Not yet flown with the new rate.
 - **The three task settings: decided, identical on both sides.**
   - **Laps: 1 on both sides.** Simulation is launched with one lap per episode (an override of
     Yifan's default of 2), including the fresh Square and FAME's Square. The real default is
@@ -228,14 +234,15 @@ Implemented on November 12, 2026. Nothing is committed in either repository.
 **CrazySim** (all eight work items):
 
 - Method settings for 56/3 in the waypoint config.
-- `train.py`: `--warm_start`, `--parent_bundle`, start of four methods from the scratch Square,
+- `train.py`: `--warm_start`, `--parent_bundle`, start from the files of a Square (`--square_...`),
   observation normalization turned off for the three methods that require it.
 - `crazysim/transfer_bundle.py` (file format) and `crazysim/warm_start.py` (writer and reader).
 - `tests/` (28 hardware-free checks) and [docs/warm_start.md](docs/warm_start.md).
 
 **Drone_Test_TRO** (all three work items, on top of its uncommitted changes):
 
-- `transfer_bundle.py` accepts and writes the KL-adaptive schedule.
+- `transfer_bundle.py` accepts the KL-adaptive schedule in a bundle; since 2026-11-13 the real stage
+  does not run it and uses its own rate and schedule instead.
 - `cf_setpoint_ppo_real_common.py` accepts either the real default command bounds or the complete
   simulation set, passed at launch with `--position-cmd-*`. The four defaults are unchanged, so other
   experiments keep the current bounds.
@@ -254,12 +261,14 @@ Implemented on November 12, 2026. Nothing is committed in either repository.
 
 **What was not checked:**
 
-- `train.py` has not been run. It needs Isaac Sim; its new code paths are only read, not executed.
+- `train.py --warm_start` has run on Isaac Sim once, for the KAE-MoE Circle pilot from the scratch
+  Square (see [Circle budget](#circle-budget-240-iterations)). The other four methods, FAME's own
+  Square and `--parent_bundle` have not been run there.
 - No physics: nothing here says a warmed policy tracks well. The CPU checks use a small tensor
   environment and tiny training settings.
-- GPU execution of the new code.
-- FAME on the waypoint task, and the Square with one lap per episode.
-- Any real flight, including the adaptive schedule and the wider command bounds on the drone.
+- FAME on the waypoint task.
+- Any real flight with the real repository's rate on a simulation bundle, and the wider command
+  bounds on the drone beyond one KAE-MoE Circle run.
 
 **Choices made while implementing, to confirm:**
 
@@ -279,6 +288,61 @@ Implemented on November 12, 2026. Nothing is committed in either repository.
 learning rate from 5e-4 to 7.5e-4 for three methods and to the 1e-3 cap for PPO fine-tuning. The policies
 were barely trained, so this says little about a real stage, but it shows the rate can rise quickly.
 
+## Circle budget: 240 iterations
+
+Decided November 12, 2026, by manual review of the KAE-MoE Circle pilot. All five methods run the
+Circle warm-up with `--max_iterations 240`.
+
+Pilot: session `2026-11-12_18-27-51_kae_moe_square-circle_pilot700`, 700 iterations, seed 42, one lap,
+started from scratch Square session `2026-11-12_17-11-32_scratch_square`. Values are training
+values logged every 7 iterations, with exploration noise.
+
+| Iteration | Return | Position error | Episodes that succeed |
+| --- | --- | --- | --- |
+| 196 | 93 | 36.7 cm | 0% |
+| 210 | 178 | 14.7 cm | 55% |
+| 224 | 129 | 23.3 cm | 7% |
+| 231 | 202 | 10.7 cm | 84% |
+| 238 | 199 | 11.4 cm | 99% |
+| 252 | 228 | 6.6 cm | 100% |
+| 259 | 239 | 4.8 cm | 100% |
+| 301 to 560 | 242 (mean) | about 4 to 5 cm | 100% |
+
+- Before about iteration 230 the policy is unstable: success swings between 0% and 84%.
+- From 238 it succeeds almost every time, with about 11 cm of error.
+- From 259 the return stays within 2% of the plateau mean for the rest of the run.
+- No lost episodes at any point and no crashes after the first 70 iterations.
+
+Checkpoint candidates exist every 20 iterations. 220 is in the unstable stretch and 260 is already on
+the plateau, so 240 is the last candidate before stabilization. With this budget the handed-over
+checkpoint should be iteration 240 itself: its return of about 200 is above every earlier candidate
+(the best is about 163).
+
+The pilot's own best checkpoint was iteration 580 (training return 244.3). Its deterministic
+validation on Circle: position RMSE 7.7 cm, 100% success, no crashes.
+
+Checks on the 240-iteration reruns:
+
+- **KAE-MoE must reproduce the pilot.** 240 is only about 10 iterations past the jump. Its return near
+  iterations 231 to 238 should be about 200 and `selected_iteration` should be 240. If not, stop and
+  review before any flight.
+- **Validate every method's handed-over policy** with `validate_waypoint.py` on its `policy.pt`. The
+  iteration-240 KAE-MoE policy has not been validated; the numbers above are training values.
+
+Seen in the pilot, relevant to the real stage:
+
+- **The learning rate is at its 1e-3 cap** for nearly the whole run, including at iteration 240, about
+  33 times the default of `Drone_Test_TRO`. The real stage no longer starts at that rate (see the
+  learning-rate decision above).
+- **Exploration noise at iteration 240 is about three times that of the converged policy** (standard
+  deviation 0.34 against 0.11 at iteration 580).
+- **The scratch Square's best checkpoint was its last iteration** (500), so the Square was still
+  improving when its training ended.
+
+Limits: one seed; the budget was chosen from KAE-MoE, the proposed method; how the other four methods
+look at 240 iterations is not known until they run. Budgets for Triangle and Figure-8 are chosen the
+same way from their own pilots.
+
 ## Open until flights
 
 These do not block the code.
@@ -296,10 +360,11 @@ These do not block the code.
 - **One budget for all methods.** It is chosen from KAE-MoE, the proposed method, by manual review
   of a single seed. Other methods may be further from or closer to convergence at that budget.
 - **No flight gate.** A method whose best checkpoint is still poor is flown anyway.
-- **The adaptive schedule has never been flown.** `Drone_Test_TRO` was tuned for 3e-5 with slow
-  decay. A real update uses about a thousand samples against about 393,000 in simulation, so the
-  measured policy change is noisier and the rate will move more. Watch the first real stage
-  closely.
+- **The adaptive schedule failed on the drone and is no longer used there.** A real update uses
+  about a thousand samples against about 393,000 in simulation. At the simulation's rate the
+  KAE-MoE Circle run of 2026-11-13 degraded within seven laps. The replacement, 3e-5 with slow
+  decay, is the rate `Drone_Test_TRO` was tuned for, but it has not been flown on a simulation
+  bundle yet, and it may be too low to show learning within 25 laps.
 - **Wider command bounds on the real drone.** The real 0.25 m lower bound currently keeps
   commands off the floor. With Yifan's bound of 0 m, a policy can command a descent to the floor.
   The remaining protections are the real crash check (height below 0.10 m or above 2.0 m), the
@@ -321,8 +386,8 @@ For every method and shape, report:
 - FAME's fresh-versus-meta test result on each new shape, and its extra interactions.
 
 State once: the budget rule (manual, from KAE-MoE, one seed), the normalization difference between
-methods, that the real stage uses the simulation's learning rate and adaptive schedule instead of
-the real repository's default (3e-5 with exponential decay), and that simulation selects the best
+methods, that the real stage uses the real repository's learning rate (3e-5 with exponential decay)
+instead of the simulation's rate and adaptive schedule, and that simulation selects the best
 checkpoint while the real side uses the final one.
 
 ## Out of scope
@@ -348,4 +413,4 @@ python -u scripts/skrl/validate_waypoint.py --headless --stage_dir $STAGE --task
 ```
 
 FAME's Square uses `--method fame --tasks square` with the same options. The warm-up commands
-(`--warm_start`, `--resume`, `--parent_bundle`) are in [docs/warm_start.md](docs/warm_start.md).
+(`--warm_start`, `--square_...`, `--parent_bundle`) are in [docs/warm_start.md](docs/warm_start.md).

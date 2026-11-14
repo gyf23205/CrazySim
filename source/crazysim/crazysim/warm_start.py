@@ -38,6 +38,14 @@ from .methods.residual import ComposedActor
 SHARED_SQUARE_METHODS = ("finetune", "residual", "componet", "kae_moe")
 """Methods that can start from a Square trained with ``--method scratch``: their own first stage is the same
 plain PPO policy. FAME trains its own Square."""
+SQUARE_FILES = {
+    "finetune": ("checkpoint",),
+    "residual": ("checkpoint",),
+    "componet": ("checkpoint",),
+    "kae_moe": ("kae",),
+    "fame": ("policy", "meta_policy"),
+}
+"""Files of the Square stage a warm-up of each method starts from (arguments of :func:`seed_from_square`)."""
 NEXT_STAGE_STRATEGY = {
     "finetune": "continue_actor_and_compatible_algorithm_state",
     "residual": "freeze_completed_current_controller_as_base",
@@ -472,35 +480,51 @@ def completed_controller(bundle: Mapping, device="cpu") -> nn.Module:
 # -- parents: what a method starts a new shape from ----------------------------------------------------------
 
 
-def seed_from_square(method: Method, stage: Mapping):
-    """Give ``method`` the state after a Square stage that was trained with ``--method scratch``.
+def seed_from_square(
+    method: Method,
+    *,
+    checkpoint: str | None = None,
+    kae: str | None = None,
+    policy: str | None = None,
+    meta_policy: str | None = None,
+) -> dict:
+    """Give ``method`` the state after a Square stage, from the files of that stage named in :data:`SQUARE_FILES`.
 
-    ``stage`` is the entry of that stage in its ``session.json``. The methods in
-    :data:`SHARED_SQUARE_METHODS` train the same plain PPO policy in their own first stage, so one Square
-    serves all of them. KAE-MoE needs the KAE of ``scripts/skrl/fit_kae.py`` in the stage directory.
+    The methods in :data:`SHARED_SQUARE_METHODS` train the same plain PPO policy in their own first stage, so
+    one Square trained with ``--method scratch`` serves all of them: ``checkpoint`` is its agent checkpoint
+    (``checkpoints/best_agent.pt``) and ``kae`` the KAE of ``scripts/skrl/fit_kae.py`` (``kae/kae.pt``). FAME
+    takes ``policy.pt`` and ``meta_policy.pt`` of its own Square stage. Returns the files that were read.
     """
-    if method.name not in SHARED_SQUARE_METHODS:
-        raise ValueError(f"Method '{method.name}' cannot start from a scratch Square; it trains its own first stage.")
-    checkpoint_path = stage.get("selected_checkpoint", stage["checkpoint"])
+    given = {"checkpoint": checkpoint, "kae": kae, "policy": policy, "meta_policy": meta_policy}
+    given = {name: os.path.abspath(path) for name, path in given.items() if path}
+    needed = SQUARE_FILES[method.name]
+    if sorted(given) != sorted(needed):
+        raise ValueError(
+            f"Method '{method.name}' starts from the Square with {', '.join('--square_' + name for name in needed)}; "
+            f"got {', '.join('--square_' + name for name in given) or 'none of them'}."
+        )
+    for name, path in given.items():
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"--square_{name}: no file {path}")
     if method.name == "finetune":
-        method.checkpoint = checkpoint_path
-        return
-    stage_dir = os.path.dirname(stage["policy"])
-    if method.name == "kae_moe":
-        kae_path = os.path.join(stage_dir, "kae", "kae.pt")
-        if not os.path.isfile(kae_path):
-            raise FileNotFoundError(
-                f"KAE-MoE needs the KAE of the Square: run scripts/skrl/fit_kae.py for {stage_dir}."
-            )
-        origin = "simulation-square:" + hashlib.sha256(Path(kae_path).read_bytes()).hexdigest()
-        method.experts = [kae_expert_from_node(kae_node(method.load_module(kae_path)), origin, method.device)]
-        return
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    controller = freeze(controller_from_node(ppo_controller_node(checkpoint), method.device))
-    if method.name == "residual":
-        method.base = controller
+        method.checkpoint = given["checkpoint"]
+    elif method.name == "kae_moe":
+        origin = "simulation-square:" + hashlib.sha256(Path(given["kae"]).read_bytes()).hexdigest()
+        method.experts = [kae_expert_from_node(kae_node(method.load_module(given["kae"])), origin, method.device)]
+    elif method.name == "fame":
+        # as Fame.resume after one stage
+        method.agent.meta_actor.load_state_dict(method.load_module(given["meta_policy"]).actor.state_dict())
+        method.agent._meta_trained = True
+        method.agent.meta_buffer.clear()
+        method.agent.meta_buffer.add(method._visited_states(method.load_module(given["policy"]).actor, "square"))
     else:
-        method.units = [PriorUnit(controller)]
+        loaded = torch.load(given["checkpoint"], map_location="cpu", weights_only=False)
+        controller = freeze(controller_from_node(ppo_controller_node(loaded), method.device))
+        if method.name == "residual":
+            method.base = controller
+        else:
+            method.units = [PriorUnit(controller)]
+    return given
 
 
 def check_parent_bundle(bundle: Mapping, method_name: str, task: str):
@@ -915,7 +939,7 @@ def export_bundle(
     budget_iterations: int,
     selected_iteration: int,
     parent: Mapping | None = None,
-    parent_square: str | None = None,
+    parent_square: Mapping | None = None,
 ) -> Path:
     """Write the learner in ``agent`` as a simulation ``transfer_bundle.pt`` for the same shape on the real drone.
 
@@ -923,7 +947,7 @@ def export_bundle(
         budget_iterations: Training iterations of the warm-up.
         selected_iteration: Iteration of the checkpoint that is in ``agent`` (at most ``budget_iterations``).
         parent: The finalized real bundle this warm-up started from, if any.
-        parent_square: Stage directory of the simulated Square this warm-up started from, if any.
+        parent_square: Files of the simulated Square this warm-up started from (:func:`seed_from_square`), if any.
     """
     if task not in tb.SHAPES:
         raise ValueError(f"Drone_Test_TRO has no shape '{task}'.")
@@ -968,7 +992,7 @@ def export_bundle(
         "phase": "simulation",
         "stage_identity": f"{method_name}:{task}:simulation:{Path(path).parent.name}",
         "parent": parent_record,
-        "simulation_parent": None if parent_square is None else {"shape": "square", "stage": str(parent_square)},
+        "simulation_parent": None if parent_square is None else {"shape": "square", "files": dict(parent_square)},
         "dependencies": tb.dependency_records(policy),
         "observation_contract": contract,
         "observation_dim": OBS_DIM,
@@ -1029,7 +1053,7 @@ def finish_warm_stage(
     *,
     budget_iterations: int,
     parent: Mapping | None = None,
-    parent_square: str | None = None,
+    parent_square: Mapping | None = None,
 ) -> tuple[nn.Module, dict]:
     """End a warm-up stage: select the best checkpoint and export it. Used instead of ``Method.end_stage``.
 
