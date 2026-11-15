@@ -83,3 +83,14 @@ kae:
   kae_coefficient: 0.1
   action_coefficient: 0.9
   seed: 777
+
+# Settings of the transfer methods (scripts/skrl/train.py --method <name>); see skrl_ppo_cfg.yaml
+methods:
+  fame:  # fast learner: the PPO agent above (models: and agent:); these are the meta-learner settings
+    size_fast2meta: 100000  # states of the current task visited by its best fast learner, used for distillation
+    size_meta: 500000  # states of earlier tasks
+    detection_steps: null  # steps per candidate when choosing the initial policy of a task; null: one episode
+    lr_meta: 1.0e-03
+    meta_batch_size: 4096
+    epoch_meta: 200
+    meta_lr_scheduler_gamma: 0.95

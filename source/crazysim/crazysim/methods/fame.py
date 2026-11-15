@@ -11,8 +11,11 @@ Ported from ``less_leg_walking_1`` (``baselines/FAME/``, ``scripts/skrl/train_FA
   task with a Wasserstein-like loss on the Gaussian ``(mean, std)``. Earlier knowledge is kept by also
   matching the previous meta learner on states stored from earlier tasks.
 - Task switch: the deterministic actions of the new fast learner and of the meta learner are both
-  evaluated on the new task; the better one initializes the fast learner's policy (mean network and
-  log standard deviation; the value network stays new).
+  evaluated on the new task; the better one initializes the fast learner's policy (mean network,
+  log standard deviation and observation normalization; the value network stays new).
+- Observation normalization (``agent.state_preprocessor: RunningStandardScaler``, as in the waypoint
+  configuration): the meta learner has its own normalization, set before every distillation to the
+  mean and variance of all states it is distilled on (this task's and the stored earlier ones).
 
 Changes from the reference:
 
@@ -37,6 +40,7 @@ import math
 import os
 import time
 import torch
+from collections.abc import Callable
 import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
@@ -47,18 +51,29 @@ from .base import Method
 
 
 class MetaPolicy(nn.Module):
-    """Meta learner: mean network and state-independent log standard deviation.
+    """Meta learner: observation normalization (or none), mean network and state-independent log standard deviation.
 
     Calling it returns the deterministic action, like a stage's ``policy.pt``.
     """
 
-    def __init__(self, actor: nn.Module, log_std: torch.Tensor):
+    def __init__(self, actor: nn.Module, log_std: torch.Tensor, preprocessor: nn.Module | None = None):
         super().__init__()
+        self.preprocessor = preprocessor
         self.actor = actor
         self.log_std = nn.Parameter(log_std.detach().clone())
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        if self.preprocessor is not None:
+            obs = self.preprocessor(obs)
         return self.actor(obs)
+
+    def set_normalization(self, states: torch.Tensor):
+        """Normalize observations with the mean and variance of ``states`` (no effect without normalization)."""
+        if self.preprocessor is not None:
+            states = states.double()
+            self.preprocessor.running_mean.copy_(states.mean(dim=0))
+            self.preprocessor.running_variance.copy_(states.var(dim=0))
+            self.preprocessor.current_count.fill_(states.shape[0])
 
 
 class StateBuffer:
@@ -81,6 +96,9 @@ class StateBuffer:
     def sample(self, batch_size: int) -> torch.Tensor:
         return self.data[torch.randint(self.size, (batch_size,), device=self.data.device)]
 
+    def all(self) -> torch.Tensor:
+        return self.data[: self.size]
+
     def clear(self):
         self.index = self.size = 0
 
@@ -91,9 +109,6 @@ class Fame(Method):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.agent_cfg["agent"].get("state_preprocessor"):
-            # the meta learner is distilled on raw observations and copied into new agents
-            raise ValueError("Method 'fame' requires 'agent.state_preprocessor: null'.")
         self.meta: MetaPolicy | None = None
         """Built at the end of the first stage, so that the first stage's fast learner starts from the same
         random state as the first stage of the other methods."""
@@ -105,14 +120,17 @@ class Fame(Method):
         agent = self.build_ppo_agent(self.new_mlp_actor(), stage_dir)
         agent.detection = None
         if self.meta is not None:
-            steps = self.method_cfg["detection_steps"]
-            avg_fresh = self._evaluate(agent.policy.actor, steps)
-            avg_meta = self._evaluate(self.meta.actor, steps)
+            # null: one episode, so that every episode can end within the evaluation
+            steps = self.method_cfg["detection_steps"] or int(self.env.unwrapped.max_episode_length)
+            avg_fresh = self._evaluate(lambda obs: self._fast_mean(agent, obs), steps)
+            avg_meta = self._evaluate(self.meta, steps)
             choice = "meta" if avg_meta > avg_fresh else "fresh"
             if choice == "meta":
                 with torch.no_grad():
                     agent.policy.actor.load_state_dict(self.meta.actor.state_dict())
                     agent.policy.log_std_parameter.copy_(self.meta.log_std)
+                    if self.meta.preprocessor is not None:
+                        agent._state_preprocessor.load_state_dict(self.meta.preprocessor.state_dict())
             print(f"[FAME] Detection on {task}: fresh return {avg_fresh:.3f}, meta return {avg_meta:.3f} -> {choice}")
             agent.detection = {"fresh_return": avg_fresh, "meta_return": avg_meta, "choice": choice}
         return agent
@@ -122,7 +140,7 @@ class Fame(Method):
         states = self._visited_states(agent, task)
         print(f"[FAME] Collected {states.shape[0]} states of {task} with the best fast learner")
         start = time.time()
-        self._train_meta(states, agent.policy)
+        self._train_meta(states, agent)
         print(f"[FAME] Meta distillation done in {time.time() - start:.1f} s")
         self.meta_buffer.add(states)
         torch.save(copy.deepcopy(self.meta).eval(), os.path.join(stage_dir, "meta_policy.pt"))
@@ -152,18 +170,28 @@ class Fame(Method):
             log_std = log_std.clamp(cfg["min_log_std"], cfg["max_log_std"])
         return log_std.exp()
 
-    def _train_meta(self, new_states: torch.Tensor, fast_policy: nn.Module):
+    @staticmethod
+    def _fast_mean(agent: Agent, obs: torch.Tensor) -> torch.Tensor:
+        """Mean action of a PPO agent, with its observation normalization."""
+        return agent.policy.actor(agent._state_preprocessor(obs))
+
+    def _train_meta(self, new_states: torch.Tensor, agent: Agent):
         """Distill the fast learner on this task's states and the previous meta learner on earlier states."""
         cfg = self.method_cfg
         batch_size = cfg["meta_batch_size"]
         previous_meta = None
         if self.meta is None:
             policy_cfg = self.agent_cfg["models"]["policy"]
+            preprocessor = agent._state_preprocessor
             self.meta = MetaPolicy(
-                self.new_mlp_actor(), torch.full((self.action_dim,), float(policy_cfg["initial_log_std"]))
+                self.new_mlp_actor(),
+                torch.full((self.action_dim,), float(policy_cfg["initial_log_std"])),
+                copy.deepcopy(preprocessor) if isinstance(preprocessor, nn.Module) else None,
             ).to(self.device)
         elif self.meta_buffer.size >= batch_size:
             previous_meta = copy.deepcopy(self.meta)
+        with torch.no_grad():
+            self.meta.set_normalization(torch.cat([self.meta_buffer.all(), new_states]))
         new_buffer = StateBuffer(new_states.shape[0], self.obs_dim, self.device)
         new_buffer.add(new_states)
 
@@ -174,16 +202,16 @@ class Fame(Method):
         def wasserstein(states, teacher_mean, teacher_log_std):
             with torch.no_grad():
                 mean, std = teacher_mean(states), self._std(teacher_log_std)
-            m_mean, m_std = self.meta.actor(states), self._std(self.meta.log_std)
+            m_mean, m_std = self.meta(states), self._std(self.meta.log_std)
             return torch.mean(torch.square(m_mean - mean).sum(-1)) + torch.square(m_std - std).sum(-1)
 
         for epoch in range(cfg["epoch_meta"]):
             for _ in range(steps):
                 # new knowledge: match the fast learner on this task's states
-                loss = wasserstein(new_buffer.sample(batch_size), fast_policy.actor, fast_policy.log_std_parameter)
+                loss = wasserstein(new_buffer.sample(batch_size), lambda obs: self._fast_mean(agent, obs),
+                                   agent.policy.log_std_parameter)
                 if previous_meta is not None:  # old knowledge: match the previous meta learner on past states
-                    loss = loss + wasserstein(self.meta_buffer.sample(batch_size), previous_meta.actor,
-                                              previous_meta.log_std)
+                    loss = loss + wasserstein(self.meta_buffer.sample(batch_size), previous_meta, previous_meta.log_std)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -192,7 +220,7 @@ class Fame(Method):
             if (epoch + 1) % 2 == 0:
                 scheduler.step()
 
-    def _evaluate(self, actor: nn.Module, num_steps: int) -> float:
+    def _evaluate(self, actor: Callable[[torch.Tensor], torch.Tensor], num_steps: int) -> float:
         """Mean return of the episodes that end within ``num_steps`` steps of the deterministic actor."""
         self.env._reset_once = True
         obs, _ = self.env.reset()

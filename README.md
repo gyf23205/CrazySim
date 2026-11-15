@@ -119,7 +119,9 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 - All methods use the same skrl PPO settings and differ only in the policy network and in what they carry between
   stages. Policy and value networks are separate. The value network and the action noise are new at every stage,
   except for `finetune` and for `fame` when it starts from the meta learner (which sets the action noise).
-- `fame`'s fast learner is this PPO agent. Sessions made before 2026-11-14 used the reference's own PPO variant
+- `fame`'s fast learner is this PPO agent. With observation normalization (waypoint configuration), the meta learner
+  has its own normalization, set to the mean and variance of all states it is distilled on, and passes it to the
+  fast learner it initializes. Sessions made before 2026-11-14 used the reference's own PPO variant
   instead (tanh-squashed actions, state-dependent noise, entropy temperature tuned toward a target entropy, own
   learning rates and initialization, 6x more gradient steps per iteration); their results are not comparable with
   the other methods, and they cannot be resumed with the current code.
@@ -187,6 +189,18 @@ python scripts/skrl/evaluate.py --headless --tasks circle rectangle figure8 \
 the policy observes the relative positions of all setpoints and outputs a position command for a port of the Crazyflie
 firmware controller, instead of thrusts. Results and every difference from that repository are in
 [docs/waypoint_control_differences.md](docs/waypoint_control_differences.md).
+
+Waypoint tasks: `square`, `circle`, `triangle`, `figure8` (shapes of `Drone_Test_TRO`), and `rectangle`, `star`,
+`vertical_circle` (the shapes of the continual-learning sequence, 1.5x larger like the circle; the vertical circle
+has radius 0.6 m around 1.0 m height). All are flown at 0.25 m/s, two laps per episode. Continual learning on
+waypoint control works with `scratch`, `finetune` and `fame`; `residual`, `componet` and `kae_moe` would need
+`agent.state_preprocessor: null` and their `methods:` settings in
+[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml):
+
+```bash
+python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method fame --headless \
+    --tasks circle rectangle figure8 star vertical_circle
+```
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method scratch \
