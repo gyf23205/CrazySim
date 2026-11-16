@@ -1,0 +1,32 @@
+{
+  "tasks": [
+    "square",
+    "circle"
+  ],
+  "method": "kae_moe",
+  "seed": 42,
+  "control_frequency": 50.0,
+  "action_mode": "relative_waypoint",
+  "command": "python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe --headless --no_eval --warm_start --max_iterations 500 env.trajectory_laps=1 --square_kae logs/skrl/crazyflie_tracking_waypoint/2026-11-14_13-44-03_scratch_square/0_square/kae/kae.pt",
+  "stages": [
+    {
+      "stage": "1_circle",
+      "task": "circle",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_14-45-48_kae_moe_square-circle/1_circle/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_14-45-48_kae_moe_square-circle/1_circle/checkpoints/final_agent.pt",
+      "minutes": 29.188896807034812,
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_14-45-48_kae_moe_square-circle/1_circle/checkpoints/best_agent.pt",
+      "best_timestep": 42240,
+      "best_training_return": 152.31885290678312,
+      "warm_start": true,
+      "budget_iterations": 500,
+      "selected_iteration": 440,
+      "learning_rate_at_selection": 0.001,
+      "transfer_bundle": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_14-45-48_kae_moe_square-circle/1_circle/transfer_bundle.pt"
+    }
+  ],
+  "warm_start": true,
+  "square": {
+    "kae": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_13-44-03_scratch_square/0_square/kae/kae.pt"
+  }
+}

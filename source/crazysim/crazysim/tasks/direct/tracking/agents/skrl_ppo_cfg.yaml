@@ -14,7 +14,7 @@ models:
     network:
       - name: net
         input: STATES
-        layers: [256, 128, 64]
+        layers: [64, 64] #[256, 128, 64]
         activations: elu
     output: ACTIONS
   value:  # see deterministic_model parameters
@@ -23,7 +23,7 @@ models:
     network:
       - name: net
         input: STATES
-        layers: [256, 128, 64]
+        layers: [64, 64] #[256, 128, 64]
         activations: elu
     output: ONE
 
@@ -37,7 +37,7 @@ memory:
 # https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
 agent:
   class: PPO
-  rollouts: 24
+  rollouts: 96 #24
   learning_epochs: 5
   mini_batches: 4
   discount_factor: 0.99
@@ -59,8 +59,8 @@ agent:
   entropy_loss_scale: 0.0
   value_loss_scale: 1.0
   kl_threshold: 0.0
-  rewards_shaper_scale: 0.1
-  time_limit_bootstrap: True
+  rewards_shaper_scale: 0.01 #0.1
+  time_limit_bootstrap: False #True
   # logging and checkpoint
   experiment:
     directory: "crazyflie_tracking"
@@ -75,7 +75,7 @@ agent:
 # timesteps is per task: one iteration = `rollouts` timesteps
 trainer:
   class: SequentialTrainer
-  timesteps: 24000
+  timesteps: 48000 #24000
   environment_info: log
 
 
@@ -93,15 +93,15 @@ methods:
     p: 1  # power of the Koopman operator in the expert outputs
     residual_hidden_dims: [256, 128, 64]  # MLP pathway
     weight_hidden_dims: [32]  # per-KAE mode-weight networks
-    router_hidden_dims: [128]  # router between KAEs
+    router_hidden_dims: [128, 64] #[128]  # router between KAEs
     gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
     kae:
       observation_samples: 30000  # observations recorded after training to fit the sampling distribution
-      hidden_dim: 256
+      hidden_dim: 32 #256
       sample_count: 15000
       batch_size: 2048
-      epochs: 7500
-      learning_rate: 1.0e-04
+      epochs: 5000 #7500
+      learning_rate: 1.0e-05 #1.0e-04
       kae_coefficient: 0.1
       action_coefficient: 0.9
       seed: 777

@@ -1,0 +1,160 @@
+{
+  "tasks": [
+    "square",
+    "circle",
+    "triangle",
+    "figure8"
+  ],
+  "method": "fame",
+  "seed": 42,
+  "control_frequency": 50.0,
+  "action_mode": "relative_waypoint",
+  "command": "python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square circle triangle figure8 --method fame --headless --seed 42 --run_name crl_cmp env.trajectory_laps=1 --max_iterations 500",
+  "stages": [
+    {
+      "stage": "0_square",
+      "task": "square",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/0_square/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/0_square/checkpoints/final_agent.pt",
+      "minutes": 83.30583174626032,
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/0_square/checkpoints/best_agent.pt",
+      "best_timestep": 36480,
+      "best_training_return": 212.75250951960086
+    },
+    {
+      "stage": "1_circle",
+      "task": "circle",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/1_circle/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/1_circle/checkpoints/final_agent.pt",
+      "minutes": 83.51869970560074,
+      "detection": {
+        "fresh_return": 12.107220649719238,
+        "meta_return": 8.749401092529297,
+        "choice": "fresh"
+      },
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/1_circle/checkpoints/best_agent.pt",
+      "best_timestep": 36480,
+      "best_training_return": 249.49925062841405
+    },
+    {
+      "stage": "2_triangle",
+      "task": "triangle",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/2_triangle/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/2_triangle/checkpoints/final_agent.pt",
+      "minutes": 84.38908707300821,
+      "detection": {
+        "fresh_return": 12.80227279663086,
+        "meta_return": 71.11897277832031,
+        "choice": "meta"
+      },
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/2_triangle/checkpoints/best_agent.pt",
+      "best_timestep": 24960,
+      "best_training_return": 160.80526082269378
+    },
+    {
+      "stage": "3_figure8",
+      "task": "figure8",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/3_figure8/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/3_figure8/checkpoints/final_agent.pt",
+      "minutes": 85.8696814695994,
+      "detection": {
+        "fresh_return": 17.80689239501953,
+        "meta_return": 26.74264907836914,
+        "choice": "meta"
+      },
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-13_19-32-56_fame_square-circle-triangle-figure8_crl_cmp/3_figure8/checkpoints/best_agent.pt",
+      "best_timestep": 36480,
+      "best_training_return": 320.482663964818
+    }
+  ],
+  "transfer": {
+    "0_square": {
+      "square": {
+        "position_error": 0.03920559957623482,
+        "crash_rate": 0.0,
+        "return": 209.6718292236328
+      },
+      "circle": {
+        "position_error": 0.47180014848709106,
+        "crash_rate": 1.0,
+        "return": 7.73708438873291
+      },
+      "triangle": {
+        "position_error": 0.1947968453168869,
+        "crash_rate": 0.0,
+        "return": 87.57620239257812
+      },
+      "figure8": {
+        "position_error": 0.5437523126602173,
+        "crash_rate": 0.98828125,
+        "return": 40.60932922363281
+      }
+    },
+    "1_circle": {
+      "square": {
+        "position_error": 0.4806339144706726,
+        "crash_rate": 1.0,
+        "return": 10.379373550415039
+      },
+      "circle": {
+        "position_error": 0.05057649686932564,
+        "crash_rate": 0.0,
+        "return": 242.17666625976562
+      },
+      "triangle": {
+        "position_error": 0.5257844924926758,
+        "crash_rate": 1.0,
+        "return": 11.169279098510742
+      },
+      "figure8": {
+        "position_error": 0.45666855573654175,
+        "crash_rate": 1.0,
+        "return": 19.211589813232422
+      }
+    },
+    "2_triangle": {
+      "square": {
+        "position_error": 0.16339688003063202,
+        "crash_rate": 0.0,
+        "return": 136.89501953125
+      },
+      "circle": {
+        "position_error": 0.5799195766448975,
+        "crash_rate": 1.0,
+        "return": 13.06533432006836
+      },
+      "triangle": {
+        "position_error": 0.0406041145324707,
+        "crash_rate": 0.0,
+        "return": 158.93240356445312
+      },
+      "figure8": {
+        "position_error": 0.5679118633270264,
+        "crash_rate": 0.0,
+        "return": 70.27922058105469
+      }
+    },
+    "3_figure8": {
+      "square": {
+        "position_error": 0.49546149373054504,
+        "crash_rate": 0.912841796875,
+        "return": 32.02647399902344
+      },
+      "circle": {
+        "position_error": 0.501906156539917,
+        "crash_rate": 1.0,
+        "return": 12.83503246307373
+      },
+      "triangle": {
+        "position_error": 0.5043131113052368,
+        "crash_rate": 0.0,
+        "return": 42.140403747558594
+      },
+      "figure8": {
+        "position_error": 0.05568847805261612,
+        "crash_rate": 0.0,
+        "return": 306.98663330078125
+      }
+    }
+  }
+}

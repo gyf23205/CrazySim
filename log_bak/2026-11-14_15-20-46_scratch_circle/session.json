@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    "circle"
+  ],
+  "method": "scratch",
+  "seed": 42,
+  "control_frequency": 50.0,
+  "action_mode": "relative_waypoint",
+  "command": "python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method scratch --headless --no_eval --max_iterations 500 env.trajectory_laps=1",
+  "stages": [
+    {
+      "stage": "0_circle",
+      "task": "circle",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_15-20-46_scratch_circle/0_circle/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_15-20-46_scratch_circle/0_circle/checkpoints/final_agent.pt",
+      "minutes": 25.427372884750366,
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_15-20-46_scratch_circle/0_circle/checkpoints/best_agent.pt",
+      "best_timestep": 32640,
+      "best_training_return": 248.52352603105845
+    }
+  ]
+}

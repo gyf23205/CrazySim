@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    "square"
+  ],
+  "method": "fame",
+  "seed": 42,
+  "control_frequency": 50.0,
+  "action_mode": "relative_waypoint",
+  "command": "python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method fame --headless --no_eval --max_iterations 500 env.trajectory_laps=1",
+  "stages": [
+    {
+      "stage": "0_square",
+      "task": "square",
+      "policy": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_13-51-11_fame_square/0_square/policy.pt",
+      "checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_13-51-11_fame_square/0_square/checkpoints/final_agent.pt",
+      "minutes": 97.5313953558604,
+      "selected_checkpoint": "/home/joonwon/github/T_RO_Crazy_Exp/CrazySim/logs/skrl/crazyflie_tracking_waypoint/2026-11-14_13-51-11_fame_square/0_square/checkpoints/best_agent.pt",
+      "best_timestep": 36480,
+      "best_training_return": 212.75250951960086
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "epochs": 7500,
+  "sample_count": 15000,
+  "padded_dim": 57,
+  "observable_dim": 8,
+  "final_loss": 7.429443212458864e-05,
+  "final_action_loss": 6.174269401526544e-06,
+  "eval_recon_relative_error": 0.09233979880809784,
+  "eval_action_mse": 6.661249244643841e-06,
+  "eval_action_variance": 0.028107553720474243,
+  "spectral_radius": 12.93073558807373,
+  "elapsed_seconds": 408.5590930710314
+}
