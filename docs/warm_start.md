@@ -9,6 +9,12 @@ Everything here uses the waypoint task (`CrazySim-TrackingWaypoint-Direct-v0`: 5
 and the shapes `square`, `circle`, `triangle` and `figure8`. Simulation commands need the Isaac Lab
 environment. The methods are `kae_moe`, `finetune` (PPO fine-tuning), `residual`, `componet` and `fame`.
 
+> **FAME is not ready for a real flight.** Since November 15, 2026 FAME's fast learner here is the PPO agent
+> of the other methods, and its bundle changed with it (see [FAME's bundle](#fames-bundle)).
+> `Drone_Test_TRO` still implements FAME's earlier PPO variant and refuses the new bundle by its equation
+> identifier. The simulation side below works; the real stage and its finalization need the matching
+> change in `Drone_Test_TRO`.
+
 ## What a warm-up does
 
 `scripts/skrl/train.py --warm_start` trains exactly one task and then, instead of finishing the task:
@@ -54,7 +60,7 @@ The `--square_...` options name the exact files of the Square stage a method sta
 | --- | --- | --- |
 | `finetune`, `residual`, `componet` | `--square_checkpoint` | `checkpoints/best_agent.pt` of the shared Square |
 | `kae_moe` | `--square_kae` | `kae/kae.pt` of the shared Square, written by `fit_kae.py` |
-| `fame` | `--square_policy`, `--square_meta_policy` | `policy.pt` and `meta_policy.pt` of FAME's own Square |
+| `fame` | `--square_checkpoint`, `--square_meta_policy` | `checkpoints/best_agent.pt` and `meta_policy.pt` of FAME's own Square |
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe \
@@ -66,7 +72,8 @@ python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --task
     --square_checkpoint $SQUARE/0_square/checkpoints/best_agent.pt
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method fame \
     --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 \
-    --square_policy $FAME_SQUARE/0_square/policy.pt --square_meta_policy $FAME_SQUARE/0_square/meta_policy.pt
+    --square_checkpoint $FAME_SQUARE/0_square/checkpoints/best_agent.pt \
+    --square_meta_policy $FAME_SQUARE/0_square/meta_policy.pt
 ```
 
 A method refuses the options of another method and a path that is not a file. The files that were read are
@@ -140,11 +147,11 @@ Then repeat steps 2 and 3 for each shape.
 | Residual | Frozen base, residual network, noise, critic, optimizer | The finished controller becomes the frozen base |
 | CompoNet | Frozen earlier controllers, attention heads, internal policy, noise, critic, optimizer | The finished controller is appended to the earlier ones |
 | KAE-MoE | KAE bank, router, mode weights, gate, MLP path, noise, critic, optimizer | The bank plus the KAE fitted to the real-adapted policy |
-| FAME | Fast actor and critic, their optimizers, temperature, meta actor, both state buffers | Consolidated meta actor and its buffer of earlier states |
+| FAME | As PPO fine-tuning (the fast learner), plus the meta learner with its own normalizer and both state buffers | Consolidated meta learner and its buffer of earlier states |
 
 A new shape in simulation uses each method's own behaviour: Residual, CompoNet and KAE-MoE start with a
-new critic and new action noise, PPO fine-tuning continues everything, and FAME tests a fresh actor
-against its meta actor.
+new critic and new action noise, PPO fine-tuning continues everything, and FAME tests a new policy
+against its meta learner and starts from the better one, with a new critic.
 
 **Learning rate.** The bundle records the KL-adaptive schedule and the rate the simulation had reached,
 but the real stage does not use them. It trains at the rate and schedule of `Drone_Test_TRO` (3e-5 with
@@ -152,16 +159,41 @@ exponential decay, factor 0.9995 per epoch) and keeps the simulation's optimizer
 Circle run of KAE-MoE used the simulation's rate (1e-3, the schedule's cap) and its tracking degraded
 within seven laps: one lap per update is too little data for that step size. PPO fine-tuning brings the
 real stage's final rate back to simulation, where the adaptive schedule raises it again within a few
-updates; the other methods start each shape with a new optimizer. FAME has fixed rates of its own on both
-sides.
+updates; the other methods, FAME included, start each shape with a new optimizer.
 
 **Observation normalization.** PPO fine-tuning normalizes observations and keeps updating the statistics.
 Residual, CompoNet and KAE-MoE do not: their frozen earlier policies take raw observations and keep their
-own normalizer, so `train.py` turns it off for these methods. FAME has none.
+own normalizer, so `train.py` turns it off for these methods. FAME normalizes like PPO fine-tuning; its
+meta learner has a normalizer of its own, which a fast learner that starts from the meta learner takes over.
 
 **Task settings.** The bundle records the task settings of the simulation run (shape sizes, speed, laps,
 command bounds, observation scales). `Drone_Test_TRO` compares them with its own run and refuses a
 mismatch.
+
+## FAME's bundle
+
+FAME's bundle is the bundle of PPO fine-tuning (same policy and value descriptions, optimizer, normalizers
+and schedule) with the equation identifier `crazysim_fame_83c30e9_v3` and one more entry,
+`agent_modules.fame_memory`:
+
+| Entry | Content |
+| --- | --- |
+| `version`, `core_equations_version` | `3` and the equation identifier |
+| `meta_policy` | Mean network and `log_std_parameter` of the meta learner, with the parameter names of the policy |
+| `meta_state_preprocessor` | The meta learner's observation normalizer (mean, variance, count) |
+| `meta` | Buffer of states of earlier shapes: `data`, `index`, `size` |
+| `fast2meta` | Buffer of states of this shape, visited by the handed-over fast learner in simulation |
+
+`agent_configuration.settings.fame_core` holds the meta-learner settings (`methods: fame` of the agent
+configuration). The way back reads `manifest.next_stage.consolidated_fame_state` of the finalized real
+bundle: the same entries without `fast2meta`, after the consolidation that ends the shape. A state of
+version 2 (the earlier variant) is refused.
+
+This layout is defined here and is not yet implemented in `Drone_Test_TRO`. To continue a FAME bundle,
+the real side needs FAME on the PPO learner it already runs for fine-tuning: restore `fame_memory`, add
+the flown states to `fast2meta`, and at finalization distill the meta learner as `Fame._train_meta` does
+(normalizer set to the statistics of all distillation states, then the Wasserstein-like loss on mean and
+standard deviation).
 
 ## Hardware-free checks
 
@@ -172,9 +204,11 @@ python -m pytest tests
 The checks train a few steps on the CPU with the unchanged method classes and a small tensor
 environment, write bundles, and load them with the loader of the `Drone_Test_TRO` checkout next to this
 repository (`DRONE_TEST_ROOT` if it is elsewhere). They need PyTorch, skrl, Gymnasium, PyYAML and pytest,
-not Isaac Sim. For all five methods they compare the mean action and the action noise of the two learners
-on the same observations, take a training step on the real side, and cover Square to Circle, a start from
-a finalized real stage, a two-shape chain and the selection of an earlier best checkpoint.
+not Isaac Sim. For `kae_moe`, `finetune`, `residual` and `componet` they compare the mean action and the
+action noise of the two learners on the same observations, take a training step on the real side, and
+cover Square to Circle, a start from a finalized real stage, a two-shape chain and the selection of an
+earlier best checkpoint. FAME is checked on this side only: the bundle it writes, the selection of the
+best checkpoint, and the start of the next shape from a stand-in for the finalized real bundle.
 
 They do not run physics and say nothing about tracking quality or flight. `scripts/skrl/train.py` itself
 is not covered, since it needs Isaac Sim.

@@ -115,7 +115,7 @@ methods:
     p: 1
     residual_hidden_dims: [256, 128, 64]  # MLP pathway
     weight_hidden_dims: [32]  # per-KAE mode-weight networks
-    router_hidden_dims: [64] #[128]  # router between KAEs
+    router_hidden_dims: [128]  # router between KAEs
     gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
     kae:
       observation_samples: 30000

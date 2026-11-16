@@ -270,6 +270,14 @@ Implemented on November 12, 2026. Nothing is committed in either repository.
 - Any real flight with the real repository's rate on a simulation bundle, and the wider command
   bounds on the drone beyond one KAE-MoE Circle run.
 
+**Update, November 15, 2026: FAME after the merge of master (83c30e9).** Yifan's FAME now trains its
+fast learner with the PPO agent of the other methods, with observation normalization on the waypoint task.
+The statements about FAME in this plan that describe its own PPO variant (own actor and critic sizes, fixed
+learning rates, entropy temperature, no normalization, `--square_policy`) no longer hold. The warm-up now
+writes FAME's bundle as the PPO fine-tuning bundle plus FAME's memory, and starts from
+`--square_checkpoint` and `--square_meta_policy` of FAME's own Square; see
+[docs/warm_start.md](docs/warm_start.md#fames-bundle). `Drone_Test_TRO` does not read this bundle yet.
+
 **Choices made while implementing, to confirm:**
 
 - **FAME's past states when coming back from a real stage** come from the real bundle (the states FAME

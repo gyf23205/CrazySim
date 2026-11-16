@@ -10,6 +10,10 @@ that learner; its finalized result is the parent of the next shape's warm-up. Th
 - :func:`finish_warm_stage` replaces ``Method.end_stage``: it selects the best checkpoint and exports it,
   without the steps that finish a shape (KAE fit, FAME consolidation). Those happen after the real flight.
 
+FAME's fast learner is the PPO agent of the other methods, so its bundle is that of PPO fine-tuning plus
+FAME's memory (``agent_modules.fame_memory``, :func:`fame_memory`): the meta learner and its two state
+buffers.
+
 The method classes are used unchanged. Parameter names differ between the two repositories, so a learner
 is written as a *description*: a nested mapping with a ``kind``, a state dictionary with the names of
 ``Drone_Test_TRO``, and the settings needed to rebuild it. Modules rebuilt from a description remember it
@@ -18,7 +22,6 @@ is written as a *description*: a nested mapping with a ``kind``, a state diction
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import os
 import subprocess
@@ -30,20 +33,20 @@ from pathlib import Path
 from . import transfer_bundle as tb
 from .methods.base import DeterministicPolicy, Method, freeze, make_mlp
 from .methods.componet import ActionOnly, CompoNet
-from .methods.fame import SquashedActor, SquashedMean, StateBuffer
+from .methods.fame import MetaPolicy, StateBuffer
 from .methods.kae import KAEExperts, KoopmanAutoencoder
 from .methods.kae_moe import MoEActor
 from .methods.residual import ComposedActor
 
 SHARED_SQUARE_METHODS = ("finetune", "residual", "componet", "kae_moe")
 """Methods that can start from a Square trained with ``--method scratch``: their own first stage is the same
-plain PPO policy. FAME trains its own Square."""
+plain PPO policy. FAME trains its own Square, whose end distills the meta learner."""
 SQUARE_FILES = {
     "finetune": ("checkpoint",),
     "residual": ("checkpoint",),
     "componet": ("checkpoint",),
     "kae_moe": ("kae",),
-    "fame": ("policy", "meta_policy"),
+    "fame": ("checkpoint", "meta_policy"),
 }
 """Files of the Square stage a warm-up of each method starts from (arguments of :func:`seed_from_square`)."""
 NEXT_STAGE_STRATEGY = {
@@ -55,6 +58,11 @@ NEXT_STAGE_STRATEGY = {
 }
 """What ``finalize_stage.py`` of ``Drone_Test_TRO`` records for the next shape, per method."""
 OBS_DIM, ACTION_DIM = 56, 3
+WAYPOINT_POLICY_LAYERS = (("0.", "net_container.0."), ("2.", "net_container.2."), ("4.", "policy_layer.0."))
+"""Layers of the plain waypoint PPO mean network: prefixes here and in ``CrazySimWaypointPolicy``."""
+FAME_MEMORY_VERSION = 3
+"""Layout of FAME's memory in a bundle. Version 2 belonged to FAME's earlier PPO variant (state-dependent
+noise, entropy temperature), which the bundles of this module no longer describe."""
 
 
 # -- modules inside rebuilt policies -------------------------------------------------------------------
@@ -237,16 +245,6 @@ def controller_from_node(node: Mapping, device="cpu") -> nn.Module:
         for index, expert in enumerate(experts):
             for key, value in expert._bundle_names.items():
                 names[f"kaes.{index}.{key}"] = f"{prefix}kae.blocks.{index}.{value}"
-    elif kind == "FameActor":
-        configuration = node["configuration"]
-        if configuration.get("normalization_state") is not None:
-            raise ValueError("A FAME actor with an input normalizer is not supported: FAME here uses raw observations.")
-        module = SquashedActor(OBS_DIM, ACTION_DIM, list(configuration["hidden_dims"]))
-        module.load_state_dict(state)
-    elif kind == "SquashedMean":
-        actor = controller_from_node(node["actor"], device)
-        module = SquashedMean(actor)
-        names = {"actor." + key: "actor." + value for key, value in actor._bundle_names.items()}
     else:
         raise ValueError(f"Unsupported policy description of kind {kind!r}.")
     return _remember(module.to(device), node, names)
@@ -435,21 +433,6 @@ def describe_controller(module: nn.Module) -> tuple[dict, dict]:
             networks=networks,
         )
         return node, names
-    if isinstance(module, SquashedActor):
-        configuration = {
-            "hidden_dims": _hidden_dims(_layout(module.trunk)),
-            "normalization_state": None,
-            "normalizer_epsilon": 1e-8,
-            "normalizer_clip_threshold": 5.0,
-        }
-        node = _node(
-            "FameActor",
-            module.state_dict(),
-            configuration=configuration,
-            equations=tb.EQUATIONS["fame"],
-            networks={"trunk": _layout(module.trunk)},
-        )
-        return node, {key: key for key, _ in module.named_parameters()}
     raise ValueError(f"Cannot describe a policy network of type {type(module).__name__} for a transfer bundle.")
 
 
@@ -468,13 +451,10 @@ def completed_controller(bundle: Mapping, device="cpu") -> nn.Module:
             if key not in ("kind", "state", "min_log_std", "policy_initialization")
         }
         node = {"kind": kind, "state": _strip(node["state"], prefix), **fields}
-    elif method == "finetune" and bundle["agent_modules"].get("state_preprocessor") is not None:
+    elif bundle["agent_modules"].get("state_preprocessor") is not None:  # finetune, fame
         checkpoint = finetune_checkpoint(bundle)
         node = ppo_controller_node(checkpoint)
-    controller = controller_from_node(node, device)
-    if method == "fame":
-        controller = SquashedMean(controller)
-    return freeze(controller)
+    return freeze(controller_from_node(node, device))
 
 
 # -- parents: what a method starts a new shape from ----------------------------------------------------------
@@ -493,7 +473,8 @@ def seed_from_square(
     The methods in :data:`SHARED_SQUARE_METHODS` train the same plain PPO policy in their own first stage, so
     one Square trained with ``--method scratch`` serves all of them: ``checkpoint`` is its agent checkpoint
     (``checkpoints/best_agent.pt``) and ``kae`` the KAE of ``scripts/skrl/fit_kae.py`` (``kae/kae.pt``). FAME
-    takes ``policy.pt`` and ``meta_policy.pt`` of its own Square stage. Returns the files that were read.
+    takes ``checkpoints/best_agent.pt`` and ``meta_policy.pt`` of its own Square stage. ``policy`` is not used
+    by any method. Returns the files that were read.
     """
     given = {"checkpoint": checkpoint, "kae": kae, "policy": policy, "meta_policy": meta_policy}
     given = {name: os.path.abspath(path) for name, path in given.items() if path}
@@ -512,11 +493,17 @@ def seed_from_square(
         origin = "simulation-square:" + hashlib.sha256(Path(given["kae"]).read_bytes()).hexdigest()
         method.experts = [kae_expert_from_node(kae_node(method.load_module(given["kae"])), origin, method.device)]
     elif method.name == "fame":
-        # as Fame.resume after one stage
-        method.agent.meta_actor.load_state_dict(method.load_module(given["meta_policy"]).actor.state_dict())
-        method.agent._meta_trained = True
-        method.agent.meta_buffer.clear()
-        method.agent.meta_buffer.add(method._visited_states(method.load_module(given["policy"]).actor, "square"))
+        # as Fame.resume after one stage: the meta learner, and its buffer refilled with the Square's best fast learner
+        meta = method.load_module(given["meta_policy"])
+        if not isinstance(meta, MetaPolicy):
+            raise ValueError(
+                "--square_meta_policy was made with FAME's earlier PPO variant; train FAME's Square again."
+            )
+        method.meta = meta.train()
+        agent = method.build_ppo_agent(method.new_mlp_actor(), os.path.dirname(given["meta_policy"]))
+        agent.load(given["checkpoint"])
+        method.meta_buffer.clear()
+        method.meta_buffer.add(method._visited_states(agent, "square"))
     else:
         loaded = torch.load(given["checkpoint"], map_location="cpu", weights_only=False)
         controller = freeze(controller_from_node(ppo_controller_node(loaded), method.device))
@@ -546,15 +533,12 @@ def check_parent_bundle(bundle: Mapping, method_name: str, task: str):
 
 
 def finetune_checkpoint(bundle: Mapping) -> dict:
-    """Agent checkpoint of this repository (policy, value, optimizer, normalizers) from a PPO fine-tuning bundle."""
+    """Agent checkpoint of this repository (policy, value, optimizer, normalizers) from a bundle of the plain
+    waypoint PPO agent (PPO fine-tuning, FAME's fast learner)."""
     modules = bundle["agent_modules"]
     names = {"log_std_parameter": "log_std_parameter"}
-    for native, canonical in (
-        ("actor.0.", "net_container.0."),
-        ("actor.2.", "net_container.2."),
-        ("actor.4.", "policy_layer.0."),
-    ):
-        names.update({native + suffix: canonical + suffix for suffix in ("weight", "bias")})
+    for native, canonical in WAYPOINT_POLICY_LAYERS:
+        names.update({"actor." + native + suffix: canonical + suffix for suffix in ("weight", "bias")})
     checkpoint = {
         "policy": {native: modules["policy"][canonical] for native, canonical in names.items()},
         "value": dict(modules["value"]),
@@ -610,51 +594,93 @@ def seed_from_bundle(method: Method, bundle: Mapping, task: str, work_dir: str):
         state = next_stage.get("consolidated_fame_state")
         if state is None:
             raise ValueError("The parent bundle has no consolidated FAME state; finalize the real stage first.")
-        agent = method.agent
-        configuration = state["actor_configuration"]
-        if configuration.get("normalization_state") is not None:
-            raise ValueError("A FAME actor with an input normalizer is not supported: FAME here uses raw observations.")
-        if list(configuration["hidden_dims"]) != list(agent.hidden_dims):
-            raise ValueError(
-                f"The parent FAME actor has hidden sizes {list(configuration['hidden_dims'])}, the configuration "
-                f"(agent.methods.fame.hidden_dims) {list(agent.hidden_dims)}."
-            )
-        agent.meta_actor.load_state_dict(state["meta_actor"])
-        agent._meta_trained = bool(state["meta_trained"])
-        saved = state["meta_buffer"]
-        agent.meta_buffer = StateBuffer(saved["data"].shape[0], agent.obs_dim, agent.device)
-        agent.meta_buffer.data.copy_(saved["data"].to(agent.device))
-        agent.meta_buffer.index, agent.meta_buffer.size = int(saved["index"]), int(saved["size"])
+        restore_fame_memory(method, state)
+
+
+# -- FAME's memory -------------------------------------------------------------------------------------------
+
+
+def _buffer_record(buffer: StateBuffer) -> dict:
+    return {"data": tb.plain(buffer.data), "index": int(buffer.index), "size": int(buffer.size)}
+
+
+def _buffer_from_record(record: Mapping, device) -> StateBuffer:
+    buffer = StateBuffer(record["data"].shape[0], record["data"].shape[1], device)
+    buffer.data.copy_(record["data"].to(device))
+    buffer.index, buffer.size = int(record["index"]), int(record["size"])
+    return buffer
+
+
+def fame_memory(method: Method, task_states: torch.Tensor | None = None) -> dict:
+    """What FAME carries besides its fast learner, for ``agent_modules.fame_memory`` of a bundle.
+
+    - ``meta_policy``: the meta learner's mean network and log standard deviation, with the parameter names of
+      the fast learner's policy (``CrazySimWaypointPolicy``).
+    - ``meta_state_preprocessor``: the meta learner's own observation normalization, or None.
+    - ``meta``: the buffer of states of earlier tasks.
+    - ``fast2meta`` (with ``task_states``): states of the current task visited by the handed-over fast learner,
+      in a buffer of ``size_fast2meta`` rows. The real stage adds its own; the consolidation that ends the
+      task distills the meta learner on them.
+
+    ``consolidated_fame_state`` of a finalized real bundle has the same entries without ``fast2meta``
+    (:func:`restore_fame_memory`).
+    """
+    meta = method.meta
+    if meta is None:
+        raise ValueError("FAME has no meta learner yet: a warm-up starts after FAME's own Square stage.")
+    policy = {"log_std_parameter": meta.log_std}
+    for native, canonical in WAYPOINT_POLICY_LAYERS:
+        policy.update({canonical + suffix: meta.actor.state_dict()[native + suffix] for suffix in ("weight", "bias")})
+    record = {
+        "version": FAME_MEMORY_VERSION,
+        "core_equations_version": tb.EQUATIONS["fame"],
+        "meta_policy": policy,
+        "meta_state_preprocessor": None if meta.preprocessor is None else meta.preprocessor.state_dict(),
+        "meta": _buffer_record(method.meta_buffer),
+    }
+    if task_states is not None:
+        fast2meta = StateBuffer(int(method.method_cfg["size_fast2meta"]), method.obs_dim, method.device)
+        fast2meta.add(task_states)
+        record["fast2meta"] = _buffer_record(fast2meta)
+    return tb.plain(record)
+
+
+def restore_fame_memory(method: Method, record: Mapping):
+    """Give FAME the meta learner and the buffer of earlier states in ``record`` (see :func:`fame_memory`)."""
+    if record.get("version") != FAME_MEMORY_VERSION or record.get("core_equations_version") != tb.EQUATIONS["fame"]:
+        raise ValueError(
+            "The FAME state of the parent bundle was made for FAME's earlier PPO variant (own actor, entropy "
+            "temperature); the current FAME cannot continue it."
+        )
+    policy = record["meta_policy"]
+    actor = method.new_mlp_actor()
+    try:
+        actor.load_state_dict(
+            {
+                native + suffix: policy[canonical + suffix]
+                for native, canonical in WAYPOINT_POLICY_LAYERS
+                for suffix in ("weight", "bias")
+            }
+        )
+    except (KeyError, RuntimeError) as error:
+        raise ValueError(f"The parent meta learner does not match the policy network (models: policy): {error}")
+    saved, preprocessor = record["meta_state_preprocessor"], None
+    if (saved is None) != (not method.agent_cfg["agent"].get("state_preprocessor")):
+        raise ValueError(
+            "The parent meta learner and the configuration (agent.state_preprocessor) disagree on observation "
+            "normalization."
+        )
+    if saved is not None:
+        # the class of the agents' normalization; MetaPolicy copies the agent's when it is first built
+        from skrl.resources.preprocessors.torch import RunningStandardScaler
+
+        preprocessor = RunningStandardScaler(size=method.env.observation_space, device=method.device)
+        preprocessor.load_state_dict(saved)
+    method.meta = MetaPolicy(actor, policy["log_std_parameter"], preprocessor).to(method.device).train()
+    method.meta_buffer = _buffer_from_record(record["meta"], method.device)
 
 
 # -- export of a warmed learner -----------------------------------------------------------------------------
-
-
-class _Temperature:
-    """Lets skrl checkpoints save and restore FAME's entropy temperature, which is a bare tensor."""
-
-    def __init__(self, agent):
-        self.agent = agent
-
-    def state_dict(self):
-        return {"log_alpha": self.agent.log_alpha.detach().clone()}
-
-    def load_state_dict(self, state):
-        with torch.no_grad():
-            self.agent.log_alpha.copy_(state["log_alpha"])
-
-
-def track_fame_training_state(agent):
-    """Add FAME's optimizers and temperature to its checkpoints.
-
-    FAME checkpoints hold only the actors and the critic, which is all a finished stage needs. A warm-up hands
-    over a learner that keeps training, so its best checkpoint must also hold the matching optimizer states.
-    Call this after ``start_stage``, which creates the fast learner's optimizers.
-    """
-    agent.checkpoint_modules["fast_actor_optimizer"] = agent.fast_actor_opt
-    agent.checkpoint_modules["fast_critic_optimizer"] = agent.fast_critic_opt
-    agent.checkpoint_modules["temperature"] = _Temperature(agent)
-    agent.checkpoint_modules["temperature_optimizer"] = agent.log_alpha_opt
 
 
 def _remap_adam(optimizer: torch.optim.Optimizer, native_names: Mapping, canonical: list[str]) -> dict:
@@ -717,15 +743,13 @@ def _scheduler_records(agent) -> tuple[dict | None, dict | None]:
 
 def describe_learner(method_name: str, agent) -> tuple[dict, dict]:
     """Description of the policy that is being trained (with its action noise) and its parameter-name map."""
-    if method_name == "fame":
-        return describe_controller(agent.fast_actor)
     policy = agent.policy
     min_log_std = float(policy._min_log_std)
-    if method_name == "finetune":
+    if method_name in ("finetune", "fame"):  # the plain waypoint PPO policy
         actor = policy.actor
         state = {"log_std_parameter": policy.log_std_parameter}
         names = {"log_std_parameter": "log_std_parameter"}
-        for native, canonical in (("0.", "net_container.0."), ("2.", "net_container.2."), ("4.", "policy_layer.0.")):
+        for native, canonical in WAYPOINT_POLICY_LAYERS:
             for suffix in ("weight", "bias"):
                 state[canonical + suffix] = actor.state_dict()[native + suffix]
                 names["actor." + native + suffix] = canonical + suffix
@@ -733,7 +757,7 @@ def describe_learner(method_name: str, agent) -> tuple[dict, dict]:
             "CrazySimWaypointPolicy",
             state,
             min_log_std=min_log_std,
-            equations=tb.EQUATIONS["finetune"],
+            equations=tb.EQUATIONS[method_name],
             networks={"hidden": _layout(actor[:4]), "output": _layout(actor[4:]), "output_transform": "as_declared"},
         )
         return node, names
@@ -761,57 +785,6 @@ def describe_learner(method_name: str, agent) -> tuple[dict, dict]:
         **{"actor." + key: prefix + value for key, value in core_names.items()},
     }
     return node, names
-
-
-def _fame_records(agent, policy: Mapping, contract: str) -> tuple[dict, dict, dict, dict]:
-    """Value description, saved modules, settings and optimizer parameter names of a FAME agent."""
-    value = _node(
-        "FameValue",
-        _prefix(agent.fast_critic.state_dict(), "net."),
-        hidden_dims=list(agent.hidden_dims),
-        networks={"value": _layout(agent.fast_critic)},
-    )
-    policy_names, value_names = _parameter_names(policy["state"], "policy"), _parameter_names(value["state"], "value")
-    actor_ids = {id(parameter): "policy." + name for name, parameter in agent.fast_actor.named_parameters()}
-    critic_ids = {id(parameter): "value.net." + name for name, parameter in agent.fast_critic.named_parameters()}
-    buffer = lambda b: {"data": tb.plain(b.data), "index": int(b.index), "size": int(b.size)}  # noqa: E731
-    modules = {
-        "policy": policy["state"],
-        "value": value["state"],
-        "optimizer": _remap_adam(agent.fast_actor_opt, actor_ids, policy_names),
-        "critic_optimizer": _remap_adam(agent.fast_critic_opt, critic_ids, value_names),
-        "temperature": {"log_alpha": tb.plain(agent.log_alpha)},
-        "temperature_optimizer": _remap_adam(
-            agent.log_alpha_opt, {id(agent.log_alpha): "temperature.log_alpha"}, ["temperature.log_alpha"]
-        ),
-        "meta_actor": describe_controller(agent.meta_actor)[0]["state"],
-        "fame_buffers": {
-            "version": 2,
-            "core_equations_version": tb.EQUATIONS["fame"],
-            "fast2meta": buffer(agent.fast2meta),
-            "meta": buffer(agent.meta_buffer),
-            "meta_trained": bool(agent._meta_trained),
-            "games": [],
-            "flag_reg": [],
-            "actor_configuration": policy["configuration"],
-            "policy_initialization": None,
-        },
-    }
-    settings = {
-        "rollouts": int(agent.cfg["rollout_steps"]),
-        "mixed_precision": False,
-        "fame_size_fast2meta": int(agent.fast2meta.capacity),
-        "fame_size_meta": int(agent.meta_buffer.capacity),
-        "fame_observation_contract": contract,
-        "fame_core": {key: tb.plain(item) for key, item in agent.cfg.items() if key != "experiment"},
-        "rewards_shaper_scale": agent.cfg["rewards_shaper_scale"],
-    }
-    names = {
-        "optimizer": [policy_names],
-        "critic_optimizer": [value_names],
-        "temperature_optimizer": [["temperature.log_alpha"]],
-    }
-    return value, modules, settings, names
 
 
 def _ppo_records(agent, policy: Mapping, names: Mapping) -> tuple[dict, dict, dict, dict, dict]:
@@ -940,6 +913,8 @@ def export_bundle(
     selected_iteration: int,
     parent: Mapping | None = None,
     parent_square: Mapping | None = None,
+    memory: Mapping | None = None,
+    method_settings: Mapping | None = None,
 ) -> Path:
     """Write the learner in ``agent`` as a simulation ``transfer_bundle.pt`` for the same shape on the real drone.
 
@@ -948,22 +923,26 @@ def export_bundle(
         selected_iteration: Iteration of the checkpoint that is in ``agent`` (at most ``budget_iterations``).
         parent: The finalized real bundle this warm-up started from, if any.
         parent_square: Files of the simulated Square this warm-up started from (:func:`seed_from_square`), if any.
+        memory: FAME only: :func:`fame_memory` with the states of ``task``.
+        method_settings: FAME only: its meta-learner settings (``methods: fame`` of the agent configuration).
     """
     if task not in tb.SHAPES:
         raise ValueError(f"Drone_Test_TRO has no shape '{task}'.")
     contract = observation_contract(environment)
     policy, names = describe_learner(method_name, agent)
+    value, modules, settings, optimizer_names, preprocessors = _ppo_records(agent, policy, names)
+    scheduler_record, scheduler_state = _scheduler_records(agent)
+    scaler = getattr(agent, "scaler", None)
+    scaler_state = None if scaler is None else tb.plain(scaler.state_dict())
+    learning_rate = float(agent.optimizer.param_groups[0]["lr"])
     if method_name == "fame":
-        value, modules, settings, optimizer_names = _fame_records(agent, policy, contract)
-        preprocessors = {"state_preprocessor": None, "value_preprocessor": None}
-        scheduler_record, scheduler_state, scaler_state = None, None, {}
-        learning_rate = float(agent.fast_actor_opt.param_groups[0]["lr"])
-    else:
-        value, modules, settings, optimizer_names, preprocessors = _ppo_records(agent, policy, names)
-        scheduler_record, scheduler_state = _scheduler_records(agent)
-        scaler = getattr(agent, "scaler", None)
-        scaler_state = None if scaler is None else tb.plain(scaler.state_dict())
-        learning_rate = float(agent.optimizer.param_groups[0]["lr"])
+        if memory is None or "fast2meta" not in memory:
+            raise ValueError("A FAME bundle needs FAME's memory with the states of the task (fame_memory).")
+        modules["fame_memory"] = tb.plain(memory)
+        settings["fame_size_fast2meta"] = int(memory["fast2meta"]["data"].shape[0])
+        settings["fame_size_meta"] = int(memory["meta"]["data"].shape[0])
+        settings["fame_observation_contract"] = contract
+        settings["fame_core"] = tb.plain(dict(method_settings or {}))
     rollouts = int(settings["rollouts"])
     per_iteration = rollouts * int(num_envs)
     counters = {"accepted_transitions": selected_iteration * per_iteration, "complete_updates": int(selected_iteration)}
@@ -1068,14 +1047,11 @@ def finish_warm_stage(
     selected_path = method.load_best_checkpoint(agent, stage_dir)
     is_best = os.path.basename(selected_path) == "best_agent.pt"
     selected_iteration = int(method.stage_info["best_timestep"]) // rollouts if is_best else int(budget_iterations)
+    policy = method.ppo_policy(agent)
+    memory = None
     if method.name == "fame":
-        if selected_iteration < budget_iterations:
-            # as Fame.end_stage: the states recorded during training were visited by later actors
-            agent.fast2meta.clear()
-            agent.fast2meta.add(method._visited_states(agent.fast_actor, task))
-        policy = SquashedMean(copy.deepcopy(agent.fast_actor))
-    else:
-        policy = method.ppo_policy(agent)
+        # as Fame.end_stage: the states of the task are those visited by the selected fast learner
+        memory = fame_memory(method, method._visited_states(agent, task))
     bundle_path = export_bundle(
         method.name,
         agent,
@@ -1087,8 +1063,10 @@ def finish_warm_stage(
         selected_iteration=selected_iteration,
         parent=parent,
         parent_square=parent_square,
+        memory=memory,
+        method_settings=method.method_cfg if method.name == "fame" else None,
     )
-    optimizer = agent.fast_actor_opt if method.name == "fame" else agent.optimizer
+    optimizer = agent.optimizer
     info = {
         **method.stage_info,
         "warm_start": True,

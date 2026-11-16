@@ -88,16 +88,13 @@ parser.add_argument(
     type=str,
     default=None,
     help="With --warm_start of finetune, residual or componet: checkpoints/best_agent.pt of the Square trained with "
-    "--method scratch.",
+    "--method scratch. With --warm_start of fame: checkpoints/best_agent.pt of FAME's own Square stage.",
 )
 parser.add_argument(
     "--square_kae",
     type=str,
     default=None,
     help="With --warm_start of kae_moe: kae/kae.pt that scripts/skrl/fit_kae.py fitted to the scratch Square.",
-)
-parser.add_argument(
-    "--square_policy", type=str, default=None, help="With --warm_start of fame: policy.pt of FAME's own Square stage."
 )
 parser.add_argument(
     "--square_meta_policy",
@@ -167,7 +164,6 @@ from crazysim.warm_start import (
     finish_warm_stage,
     seed_from_bundle,
     seed_from_square,
-    track_fame_training_state,
 )
 from crazysim.tasks.direct.tracking.tracking_env_cfg import TrackingEnvCfg, control_frequency, set_control_frequency
 
@@ -181,7 +177,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
     previous = None
     square_files = {
         name: getattr(args_cli, f"square_{name}")
-        for name in ("checkpoint", "kae", "policy", "meta_policy")
+        for name in ("checkpoint", "kae", "meta_policy")
         if getattr(args_cli, f"square_{name}")
     }
     """Files of the Square stage a warm-up starts from (``--square_...``)."""
@@ -348,8 +344,6 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         switch_task(env, task)
 
         agent = method.start_stage(index, task, stage_dir)
-        if args_cli.warm_start and args_cli.method == "fame":
-            track_fame_training_state(agent)
         SequentialTrainer(env=env, agents=agent, cfg=trainer_cfg).train()
         os.makedirs(os.path.join(stage_dir, "checkpoints"), exist_ok=True)
         agent.save(os.path.join(stage_dir, FINAL_CHECKPOINT))

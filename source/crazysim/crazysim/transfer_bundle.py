@@ -29,9 +29,13 @@ EQUATIONS = {
     "residual": "crazysim_residual_v2",
     "componet": "crazysim_componet_v2",
     "finetune": "crazysim_waypoint_ppo_v1",
-    "fame": "crazysim_fame_585e33a_v2",
+    "fame": "crazysim_fame_83c30e9_v3",
 }
-"""Equation identifier that ``Drone_Test_TRO`` requires for each method."""
+"""Equation identifier of each method. ``Drone_Test_TRO`` requires the same one.
+
+FAME's names the commit of this repository that made its fast learner the PPO agent of the other methods.
+``crazysim_fame_585e33a_v2`` was FAME's own PPO variant (state-dependent noise, entropy temperature); a
+bundle of one cannot be read as the other."""
 OBSERVATION_SPECIFICATION = {
     "setpoints": 16,
     "reference_values": 48,
@@ -133,14 +137,7 @@ def dependency_records(policy_node: Mapping) -> list[dict]:
 
 
 def distribution_contract(method: str, policy_node: Mapping) -> dict:
-    """How the action noise is applied, as ``Drone_Test_TRO`` records it."""
-    if method == "fame":
-        return {
-            "kind": "state_dependent_raw_mean_tanh_gaussian_v1",
-            "log_std_min": -5.0,
-            "log_std_max": 2.0,
-            "log_probability": "raw_action_with_tanh_jacobian",
-        }
+    """How the action noise is applied, as ``Drone_Test_TRO`` records it. The same for every method."""
     return {
         "kind": "bounded_center_inverse_tanh_gaussian_v1",
         "epsilon": 1e-6,

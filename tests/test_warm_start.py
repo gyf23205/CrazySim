@@ -2,6 +2,9 @@
 
 Each test trains a few steps with the unchanged method classes, writes the bundle, loads it with the
 loader of ``Drone_Test_TRO`` and compares the two learners on the same observations.
+
+FAME is checked on this side only (the last tests): ``Drone_Test_TRO`` still implements FAME's earlier PPO
+variant and refuses the equation identifier of the current one.
 """
 
 import copy
@@ -25,9 +28,8 @@ from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
 from crazysim.methods.kae import KoopmanAutoencoder
 
 ROLLOUTS, NUM_ENVS = 4, 2
-FAME_HIDDEN = [16, 8]
 SHARED = ("kae_moe", "finetune", "residual", "componet")
-ALL = (*SHARED, "fame")
+"""Methods that start from the shared Square and that ``Drone_Test_TRO`` imports."""
 
 
 @pytest.fixture(scope="module")
@@ -98,9 +100,8 @@ def agent_cfg(method: str) -> dict:
         timesteps=2 * ROLLOUTS, disable_progressbar=True, close_environment_at_exit=False, headless=True
     )
     cfg["methods"]["fame"].update(
-        hidden_dims=FAME_HIDDEN, ppo_epochs=1, num_mini_batches=1, mini_batch_size=4, size_fast2meta=32,
-        size_meta=64, detection_steps=4, epoch_meta=1,
-    )  # fmt: skip
+        size_fast2meta=32, size_meta=64, detection_steps=4, epoch_meta=1, meta_batch_size=4
+    )
     if METHODS[method].reuses_policies:  # as scripts/skrl/train.py
         cfg["agent"].update(state_preprocessor=None, state_preprocessor_kwargs=None)
     return cfg
@@ -156,7 +157,7 @@ def seed_square(method, stage) -> dict:
     """Start ``method`` from the files of a finished Square stage, as the ``--square_...`` options do."""
     stage_dir = Path(stage["policy"]).parent
     if method.name == "fame":
-        files = {"policy": stage["policy"], "meta_policy": stage_dir / "meta_policy.pt"}
+        files = {"checkpoint": stage["selected_checkpoint"], "meta_policy": stage_dir / "meta_policy.pt"}
     elif method.name == "kae_moe":
         files = {"kae": stage_dir / "kae" / "kae.pt"}
     else:
@@ -168,8 +169,6 @@ def warm_up(method, env, tmp_path, task, index, **parents):
     """One warm-up stage as scripts/skrl/train.py --warm_start runs it."""
     stage_dir = tmp_path / f"warm_{task}" / f"{index}_{task}"
     agent = method.start_stage(index, task, str(stage_dir))
-    if method.name == "fame":
-        ws.track_fame_training_state(agent)
     train(env, agent)
     (stage_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
     agent.save(str(stage_dir / FINAL_CHECKPOINT))
@@ -178,12 +177,9 @@ def warm_up(method, env, tmp_path, task, index, **parents):
     return agent, policy, info
 
 
-def simulation_distribution(method_name, agent, states):
+def simulation_distribution(agent, states):
     """Mean action and log standard deviation of the learner in this repository."""
     with torch.no_grad():
-        if method_name == "fame":
-            mean, std = agent.fast_actor.dist_params(states)
-            return mean.tanh(), std.log()
         return agent.policy.actor(agent._state_preprocessor(states, train=False)), agent.policy.log_std_parameter
 
 
@@ -202,26 +198,19 @@ def check_real_import(real, method_name, agent, policy, info, task):
     transfer = real.restore_transfer_agent(target, bundle)
 
     states = torch.randn(9, 56)
-    ours = simulation_distribution(method_name, agent, states)
+    ours = simulation_distribution(agent, states)
     for mine, theirs in zip(ours, real._params(target, states)):
         torch.testing.assert_close(mine.expand_as(theirs), theirs, rtol=2e-5, atol=3e-6)
     # policy.pt, which the validation script flies, is the same controller
     with torch.no_grad():
         torch.testing.assert_close(policy(states), ours[0])
-    if method_name == "fame":  # method memory and temperature arrive unchanged
-        assert (
-            target.memory_fast2meta.size == agent.fast2meta.size and target.memory_meta.size == agent.meta_buffer.size
-        )
-        torch.testing.assert_close(target.memory_meta.all(), agent.meta_buffer.all())
-        torch.testing.assert_close(target.log_alpha, agent.log_alpha)
-    else:
-        # the bundle records the adaptive schedule and the rate the simulation reached, but the real phase
-        # trains at its own rate with its own schedule (one lap per update is too little data for the former)
-        assert bundle["agent_configuration"]["scheduler"]["kind"] == "KLAdaptiveLR"
-        assert bundle["manifest"]["learning_rate_at_selection"] == pytest.approx(info["learning_rate_at_selection"])
-        assert type(target.scheduler).__name__ == "ExponentialLR"
-        assert target.optimizer.param_groups[0]["lr"] == pytest.approx(target.cfg["learning_rate"])
-        assert "learning_rate_schedule" in transfer["resets"]
+    # the bundle records the adaptive schedule and the rate the simulation reached, but the real phase
+    # trains at its own rate with its own schedule (one lap per update is too little data for the former)
+    assert bundle["agent_configuration"]["scheduler"]["kind"] == "KLAdaptiveLR"
+    assert bundle["manifest"]["learning_rate_at_selection"] == pytest.approx(info["learning_rate_at_selection"])
+    assert type(target.scheduler).__name__ == "ExponentialLR"
+    assert target.optimizer.param_groups[0]["lr"] == pytest.approx(target.cfg["learning_rate"])
+    assert "learning_rate_schedule" in transfer["resets"]
 
     before = copy.deepcopy(target.models["policy"].state_dict())
     for step in range(ROLLOUTS):
@@ -272,38 +261,9 @@ def test_circle_warm_up_from_shared_square_continues_on_the_real_side(real, squa
             assert len(target.policy.moe_core.kae.blocks) == 1
 
 
-def test_fame_trains_its_own_square_and_its_circle_warm_up_continues_on_the_real_side(real, tmp_path):
-    torch.manual_seed(13)
-    env = TensorEnv()
-    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
-    stage = finished_stage(method, env, tmp_path, "square_fame")
-    # a new process, as train.py --resume <FAME Square session> --warm_start
-    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
-    method.resume([stage])
-    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1)
-    assert agent.detection["choice"] in ("meta", "fresh")
-    check_real_import(real, "fame", agent, policy, info, "circle")
-
-
 def real_parent(real, method_name, shape, next_shape, tmp_path):
     """A finalized real bundle of ``shape`` for ``next_shape``, made with the code of ``Drone_Test_TRO``."""
-    if method_name == "fame":
-        # the test agent of Drone_Test_TRO has an input normalizer; FAME here uses raw observations
-        from skrl.memories.torch import RandomMemory
-
-        models = {"policy": real.FameActor(real.OBS, real.ACT, "cpu", hidden_dims=FAME_HIDDEN),
-                  "value": real.FameValue(real.OBS, real.ACT, "cpu", hidden_dims=FAME_HIDDEN)}  # fmt: skip
-        cfg = {"rollouts": ROLLOUTS, "learning_epochs": 1, "mini_batches": 1, "state_preprocessor": None,
-               "value_preprocessor": None, "learning_rate": 3e-4, "learning_rate_scheduler": None,
-               "fame_size_fast2meta": 32, "fame_size_meta": 64,
-               "fame_core": {"ppo_epochs": 1, "num_mini_batches": 1, "mini_batch_size": 4, "epoch_meta": 1},
-               "experiment": {"write_interval": 0, "checkpoint_interval": 0}}  # fmt: skip
-        source = real.RealFameAgent(models=models, memory=RandomMemory(memory_size=ROLLOUTS, num_envs=1, device="cpu"),
-                                    observation_space=real.OBS, action_space=real.ACT, device="cpu", cfg=cfg)  # fmt: skip
-        source.init()
-        source.games, source.flag_reg = [shape], ["Initial"]
-    else:
-        source = real._agent(method_name)
+    source = real._agent(method_name)
     for step in range(ROLLOUTS):
         real._step(source, step)
     return finalize_real_stage(real, source, method_name, shape, next_shape, tmp_path), source
@@ -331,17 +291,13 @@ def finalize_real_stage(real, source, method_name, shape, next_shape, tmp_path):
     if method_name == "kae_moe":
         next_stage["appended_kae"] = real.describe_actor(source.policy.moe_core.kae.blocks[-1])
         next_stage["appended_kae_record"] = {"path": "fitted.pth", "sha256": real._digest(next_stage["appended_kae"])}
-    if method_name == "fame":
-        source.end_of_shape_segment()
-        next_stage["consolidated_fame_state"] = source.fame_state(shape)
-        next_stage["consolidation_count"] = 1
     finalized = real.update_transfer_bundle(
         path, next_stage=next_stage, output_path=tmp_path / f"real_{shape}_finalized.pt"
     )
     return tb.read_bundle(finalized)
 
 
-@pytest.mark.parametrize("method_name", ALL)
+@pytest.mark.parametrize("method_name", SHARED)
 @pytest.mark.parametrize("shapes", [("circle", "triangle"), ("triangle", "figure8")])
 def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, tmp_path, method_name, shapes):
     torch.manual_seed(17)
@@ -380,8 +336,6 @@ def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, t
         assert target.policy.componet_core.n_prev == source.policy.componet_core.n_prev + 1
     if method_name == "residual":
         assert bundle["architecture"]["policy"]["chain_depth"] == source.policy.residual_core.chain_depth + 1
-    if method_name == "fame":
-        assert agent.detection is not None
 
 
 @pytest.mark.parametrize("task", ["square", "circle", "triangle", "figure8"])
@@ -415,7 +369,7 @@ def test_bundle_checksum_and_parent_checks(real, square_stage, tmp_path):
     assert tb.digest(unsealed) == real._digest(unsealed)
     with pytest.raises(ValueError, match="finished real stage"):
         ws.check_parent_bundle(bundle, "residual", "triangle")  # a warm-up is not a parent
-    with pytest.raises(ValueError, match="--square_policy, --square_meta_policy"):  # FAME has its own Square
+    with pytest.raises(ValueError, match="--square_checkpoint, --square_meta_policy"):  # FAME has its own Square
         fame = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
         ws.seed_from_square(fame, checkpoint=square_stage["selected_checkpoint"])
     with pytest.raises(FileNotFoundError, match="--square_checkpoint"):
@@ -426,25 +380,20 @@ def test_bundle_checksum_and_parent_checks(real, square_stage, tmp_path):
         tb.read_bundle(tmp_path / "changed.pt")
 
 
-@pytest.mark.parametrize("method_name", ALL)
+@pytest.mark.parametrize("method_name", SHARED)
 def test_chain_square_circle_real_triangle_real(real, square_stage, tmp_path, method_name):
     """Simulation Circle -> real Circle (trained and finalized there) -> simulation Triangle -> real Triangle."""
     torch.manual_seed(23)
     env = TensorEnv()
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
-    if method_name == "fame":
-        seed_square(method, finished_stage(method, env, tmp_path, "square_fame"))
-    else:
-        seed_square(method, square_stage)
+    seed_square(method, square_stage)
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1)
     circle, target = check_real_import(real, method_name, agent, policy, info, "circle")  # one real update included
 
-    if method_name == "fame":
-        target.games, target.flag_reg = ["square", "circle"], ["Initial", agent.detection["choice"]]
     parent = finalize_real_stage(real, target, method_name, "circle", "triangle", tmp_path)
     assert parent["manifest"]["parent"]["artifact_id"] == circle["manifest"]["artifact_id"]
-    if method_name != "fame":  # the real side records the schedule it ran, which is its own
-        assert parent["agent_configuration"]["scheduler"]["kind"] == "ExponentialLR"
+    # the real side records the schedule it ran, which is its own
+    assert parent["agent_configuration"]["scheduler"]["kind"] == "ExponentialLR"
 
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
     ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
@@ -466,19 +415,14 @@ def test_chain_square_circle_real_triangle_real(real, square_stage, tmp_path, me
         )
 
 
-@pytest.mark.parametrize("method_name", ["finetune", "kae_moe", "fame"])
+@pytest.mark.parametrize("method_name", ["finetune", "kae_moe"])
 def test_the_best_checkpoint_within_the_budget_is_handed_over(real, square_stage, tmp_path, method_name):
     """Rewards drop after the first iteration, so the checkpoint of iteration 1 of 2 must be selected."""
     torch.manual_seed(29)
     env = TensorEnv()
     method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
-    if method_name == "fame":
-        method.resume([finished_stage(method, env, tmp_path, "square_fame")])
-    else:
-        seed_square(method, square_stage)
-    env.penalty_after = env.steps + ROLLOUTS  # counted from here: detection steps of FAME come first
-    if method_name == "fame":
-        env.penalty_after += 2 * 4  # two candidates, detection_steps each
+    seed_square(method, square_stage)
+    env.penalty_after = env.steps + ROLLOUTS
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1)
     assert info["selected_iteration"] == 1 and info["budget_iterations"] == 2
     assert info["selected_checkpoint"].endswith("best_agent.pt")
@@ -490,19 +434,126 @@ def test_the_best_checkpoint_within_the_budget_is_handed_over(real, square_stage
         "rule": "best_training_return_within_budget", "actual_update": 1, "actual_iteration": 1}  # fmt: skip
     assert manifest["phase_counters"]["accepted_transitions"] == ROLLOUTS * NUM_ENVS
     assert manifest["budget"]["allocated_iterations"] == 2
-    if method_name == "fame":
-        torch.testing.assert_close(
-            bundle["agent_modules"]["policy"]["trunk.0.weight"], best["fast_actor"]["trunk.0.weight"]
-        )
-        # optimizer state and temperature of the same iteration, not of the final one
-        saved = best["fast_actor_optimizer"]["state"][0]["exp_avg"]
-        torch.testing.assert_close(bundle["agent_modules"]["optimizer"]["state"][0]["exp_avg"], saved)
-        torch.testing.assert_close(
-            bundle["agent_modules"]["temperature"]["log_alpha"], best["temperature"]["log_alpha"]
-        )
-    else:
-        torch.testing.assert_close(
-            bundle["agent_modules"]["policy"]["log_std_parameter"], best["policy"]["log_std_parameter"]
-        )
-        assert manifest["learning_rate_at_selection"] == best["optimizer"]["param_groups"][0]["lr"]
+    torch.testing.assert_close(
+        bundle["agent_modules"]["policy"]["log_std_parameter"], best["policy"]["log_std_parameter"]
+    )
+    assert manifest["learning_rate_at_selection"] == best["optimizer"]["param_groups"][0]["lr"]
     check_real_import(real, method_name, agent, policy, info, "circle")
+
+
+# -- FAME: this repository only ------------------------------------------------------------------------------
+
+
+def fame_square(env, tmp_path):
+    """FAME after its own Square stage, started from that stage's files as ``--square_...`` does."""
+    stage = finished_stage(METHODS["fame"](env, agent_cfg("fame"), str(tmp_path)), env, tmp_path, "square_fame")
+    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))  # a new process
+    return method, seed_square(method, stage)
+
+
+def finalized_fame_parent(bundle, next_shape, path):
+    """Stand-in for a finalized real stage: the warm-up bundle as a real one whose consolidated state is the
+    memory it was handed. No real training or consolidation happens; only the way back is exercised."""
+    parent = copy.deepcopy({key: value for key, value in bundle.items() if key != "_source"})
+    memory = parent["agent_modules"]["fame_memory"]
+    parent["manifest"]["phase"] = "real"
+    parent["manifest"]["next_stage"] = {
+        "shape": next_shape, "phase": "simulation", "strategy": ws.NEXT_STAGE_STRATEGY["fame"],
+        "consolidated_fame_state": {key: value for key, value in memory.items() if key != "fast2meta"},
+    }  # fmt: skip
+    return tb.read_bundle(tb.write_bundle(parent, path))
+
+
+def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
+    torch.manual_seed(13)
+    env = TensorEnv()
+    method, files = fame_square(env, tmp_path)
+    square_states = method.meta_buffer.all().clone()
+    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
+    assert agent.detection["choice"] in ("meta", "fresh")
+
+    bundle = tb.read_bundle(info["transfer_bundle"])
+    manifest, modules = bundle["manifest"], bundle["agent_modules"]
+    assert manifest["equations"] == tb.EQUATIONS["fame"] == bundle["architecture"]["policy"]["equations"]
+    assert manifest["distribution"]["kind"] == "bounded_center_inverse_tanh_gaussian_v1"
+    assert manifest["simulation_parent"] == {"shape": "square", "files": files}
+    assert manifest["preserved_method_memory"] == ["fast2meta", "meta"]
+    assert bundle["agent_configuration"]["settings"]["fame_core"]["epoch_meta"] == 1
+    # the fast learner is the plain PPO learner: the description of PPO fine-tuning, with FAME's identifier
+    assert bundle["architecture"]["policy"]["kind"] == "CrazySimWaypointPolicy"
+    assert set(modules) == {"policy", "value", "optimizer", "state_preprocessor", "value_preprocessor", "fame_memory"}
+    states = torch.randn(9, 56)
+    mean, log_std = simulation_distribution(agent, states)
+    with torch.no_grad():
+        torch.testing.assert_close(policy(states), mean)
+        torch.testing.assert_close(ws.completed_controller(bundle)(states), mean, rtol=2e-5, atol=3e-6)
+    checkpoint = ws.finetune_checkpoint(bundle)
+    torch.testing.assert_close(checkpoint["policy"]["log_std_parameter"], log_std)
+    torch.testing.assert_close(checkpoint["state_preprocessor"]["running_mean"], agent._state_preprocessor.running_mean)
+
+    memory = modules["fame_memory"]
+    assert memory["version"] == ws.FAME_MEMORY_VERSION
+    assert memory["fast2meta"]["size"] == memory["fast2meta"]["data"].shape[0] == 32  # states of the Circle
+    assert memory["meta"]["size"] == square_states.shape[0] == 32 and memory["meta"]["data"].shape[0] == 64
+    torch.testing.assert_close(memory["meta"]["data"][:32], square_states)
+    torch.testing.assert_close(memory["meta_policy"]["log_std_parameter"], method.meta.log_std)
+    torch.testing.assert_close(
+        memory["meta_state_preprocessor"]["running_variance"], method.meta.preprocessor.running_variance
+    )
+
+
+def test_fame_next_shape_starts_from_the_consolidated_state_of_the_parent(tmp_path):
+    torch.manual_seed(23)
+    env = TensorEnv()
+    method, _ = fame_square(env, tmp_path)
+    _, _, info = warm_up(method, env, tmp_path, "circle", 1)
+    circle = tb.read_bundle(info["transfer_bundle"])
+    with pytest.raises(ValueError, match="finished real stage"):
+        ws.check_parent_bundle(circle, "fame", "triangle")  # a warm-up is not a parent
+    parent = finalized_fame_parent(circle, "triangle", tmp_path / "circle_finalized.pt")
+
+    restored = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+    ws.seed_from_bundle(restored, parent, "triangle", str(tmp_path / "parent"))
+    states = torch.randn(6, 56)
+    with torch.no_grad():
+        torch.testing.assert_close(restored.meta(states), method.meta(states))
+    torch.testing.assert_close(restored.meta.log_std, method.meta.log_std)
+    assert restored.meta.training and all(parameter.requires_grad for parameter in restored.meta.parameters())
+    torch.testing.assert_close(restored.meta_buffer.all(), method.meta_buffer.all())
+    assert (restored.meta_buffer.index, restored.meta_buffer.capacity) == (method.meta_buffer.index, 64)
+
+    agent, _, info = warm_up(restored, env, tmp_path, "triangle", 2, parent=parent)
+    assert agent.detection["choice"] in ("meta", "fresh")
+    triangle = tb.read_bundle(info["transfer_bundle"])["manifest"]
+    assert triangle["parent"]["artifact_id"] == parent["manifest"]["artifact_id"] and triangle["shape"] == "triangle"
+    spent = info["selected_iteration"] * ROLLOUTS * NUM_ENVS
+    assert triangle["cumulative_counters"]["accepted_transitions"] == (
+        circle["manifest"]["cumulative_counters"]["accepted_transitions"] + spent
+    )
+
+    # a parent of FAME's earlier PPO variant, and a parent without observation normalization, are refused
+    state = parent["manifest"]["next_stage"]["consolidated_fame_state"]
+    with pytest.raises(ValueError, match="earlier PPO variant"):
+        ws.restore_fame_memory(restored, {**state, "version": 2})
+    with pytest.raises(ValueError, match="observation normalization"):
+        ws.restore_fame_memory(restored, {**state, "meta_state_preprocessor": None})
+
+
+def test_fame_hands_over_the_best_checkpoint_within_the_budget(tmp_path):
+    """Rewards drop after the first iteration, so the checkpoint of iteration 1 of 2 must be selected."""
+    torch.manual_seed(29)
+    env = TensorEnv()
+    method, _ = fame_square(env, tmp_path)
+    env.penalty_after = env.steps + 2 * 4 + ROLLOUTS  # two candidates, detection_steps each, come before training
+    agent, _, info = warm_up(method, env, tmp_path, "circle", 1)
+    assert info["selected_iteration"] == 1 and info["budget_iterations"] == 2
+    assert info["selected_checkpoint"].endswith("best_agent.pt")
+
+    best = torch.load(info["selected_checkpoint"], weights_only=False)
+    bundle = tb.read_bundle(info["transfer_bundle"])
+    assert bundle["manifest"]["checkpoint_selection"]["actual_iteration"] == 1
+    # policy, optimizer state and rate of the same iteration, not of the final one
+    modules = bundle["agent_modules"]
+    torch.testing.assert_close(modules["policy"]["net_container.0.weight"], best["policy"]["actor.0.weight"])
+    torch.testing.assert_close(modules["policy"]["log_std_parameter"], best["policy"]["log_std_parameter"])
+    assert bundle["manifest"]["learning_rate_at_selection"] == best["optimizer"]["param_groups"][0]["lr"]
