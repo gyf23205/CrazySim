@@ -34,6 +34,24 @@ def _figure8_period(a: float, b: float, speed: float, samples: int = 4096) -> fl
 _TRIANGLE_HEIGHT = 0.5 * math.sqrt(3.0)
 
 
+def _star_vertices(outer_radius: float, inner_radius: float, tips: int = 5) -> tuple[tuple[float, float], ...]:
+    """Vertices of a star polygon, alternating tips and notches, starting at the tip on +x."""
+    radii = [outer_radius if index % 2 == 0 else inner_radius for index in range(2 * tips)]
+    return tuple(
+        (r * math.cos(math.pi * index / tips), r * math.sin(math.pi * index / tips)) for index, r in enumerate(radii)
+    )
+
+
+def _perimeter(vertices: tuple[tuple[float, float], ...]) -> float:
+    return sum(math.dist(vertices[index], vertices[(index + 1) % len(vertices)]) for index in range(len(vertices)))
+
+
+_RECTANGLE = ((0.75, -0.45), (0.75, 0.45), (-0.75, 0.45), (-0.75, -0.45))
+_STAR = _star_vertices(0.75, 0.3)
+VERTICAL_CIRCLE_CENTER = (0.0, 0.0, 1.0)
+"""Center of the vertical circle: higher than ``FLIGHT_HEIGHT`` so that the circle stays within the height limits."""
+
+
 @configclass
 class WaypointTrackingEnvCfg(TrackingEnvCfg):
     # 50 Hz policy (DEFAULT_CONTROL_PERIOD_S = 0.02 s); 500 Hz physics, the rate of the firmware attitude loop
@@ -92,6 +110,13 @@ class WaypointTrackingEnvCfg(TrackingEnvCfg):
         ),
         "figure8": ArcLengthFigure8Cfg(
             size=(1.0, 0.5), center=CENTER, period=_figure8_period(1.0, 0.5, TRAJECTORY_SPEED)
+        ),
+        # not in Drone_Test_TRO: the other shapes of the continual-learning sequence of TrackingEnvCfg, scaled by 1.5
+        # (as the circle: radius 0.75 m here, 0.5 m there), except the vertical circle (height limits)
+        "rectangle": PolygonCfg(vertices=_RECTANGLE, center=CENTER, period=_perimeter(_RECTANGLE) / TRAJECTORY_SPEED),
+        "star": PolygonCfg(vertices=_STAR, center=CENTER, period=_perimeter(_STAR) / TRAJECTORY_SPEED),
+        "vertical_circle": CircleCfg(
+            radius=0.6, center=VERTICAL_CIRCLE_CENTER, plane="xz", period=2.0 * math.pi * 0.6 / TRAJECTORY_SPEED
         ),
     }
     trajectory_laps: int = 2

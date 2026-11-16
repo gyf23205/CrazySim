@@ -116,11 +116,15 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
   stage builds on (the base of `residual`, the unit of `componet`, the policy the KAE of `kae_moe` is fitted to, the
   fast learner that `fame` distills). Sessions named `*_setpoints_all` predate this: there only `finetune` used the
   best agent and the other methods kept the final one.
-- `finetune`, `scratch`, `residual`, `componet` and `kae_moe` all use the same skrl PPO settings and differ only
-  in the policy network. Policy and value networks are separate. The value network and the action noise are new at
-  every stage, except for `finetune`.
-- `fame` runs its own PPO variant (tanh-squashed actions, state-dependent noise, entropy temperature tuned toward a
-  target entropy), as in the reference.
+- All methods use the same skrl PPO settings and differ only in the policy network and in what they carry between
+  stages. Policy and value networks are separate. The value network and the action noise are new at every stage,
+  except for `finetune` and for `fame` when it starts from the meta learner (which sets the action noise).
+- `fame`'s fast learner is this PPO agent. With observation normalization (waypoint configuration), the meta learner
+  has its own normalization, set to the mean and variance of all states it is distilled on, and passes it to the
+  fast learner it initializes. Sessions made before 2026-11-14 used the reference's own PPO variant
+  instead (tanh-squashed actions, state-dependent noise, entropy temperature tuned toward a target entropy, own
+  learning rates and initialization, 6x more gradient steps per iteration); their results are not comparable with
+  the other methods, and they cannot be resumed with the current code.
 - Method settings are in the `methods:` section of
   [skrl_ppo_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_cfg.yaml) and can be overridden
   with Hydra, e.g. `agent.methods.kae_moe.kae.epochs=2000`.
@@ -135,7 +139,7 @@ Options:
 - `--resume SESSION_DIR`: continue a finished session of the same method with the tasks of `--tasks` as further
   stages (e.g. `--tasks star vertical_circle`). The method state after the session's last stage is restored from its
   files (`finetune`: the carried checkpoint; `residual`, `componet`: the stage policies; `kae_moe`: the KAEs; `fame`:
-  the meta learner, with its buffer of earlier-task states refilled by rolling out each stage's fast learner). A new
+  the meta learner, with its buffer of earlier-task states refilled by rolling out each stage's best fast learner). A new
   session directory is created; its `session.json` lists the earlier stages too, and the earlier policies are
   evaluated on the new tasks to complete the transfer matrix.
 - `--control_freq HZ`: control rate, i.e. environment steps per second at which the policy acts (default 100).
@@ -185,6 +189,18 @@ python scripts/skrl/evaluate.py --headless --tasks circle rectangle figure8 \
 the policy observes the relative positions of all setpoints and outputs a position command for a port of the Crazyflie
 firmware controller, instead of thrusts. Results and every difference from that repository are in
 [docs/waypoint_control_differences.md](docs/waypoint_control_differences.md).
+
+Waypoint tasks: `square`, `circle`, `triangle`, `figure8` (shapes of `Drone_Test_TRO`), and `rectangle`, `star`,
+`vertical_circle` (the shapes of the continual-learning sequence, 1.5x larger like the circle; the vertical circle
+has radius 0.6 m around 1.0 m height). All are flown at 0.25 m/s, two laps per episode. Continual learning on
+waypoint control works with `scratch`, `finetune` and `fame`; `residual`, `componet` and `kae_moe` would need
+`agent.state_preprocessor: null` and their `methods:` settings in
+[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml):
+
+```bash
+python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method fame --headless \
+    --tasks circle rectangle figure8 star vertical_circle
+```
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method scratch \
