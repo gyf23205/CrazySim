@@ -106,17 +106,26 @@ class _ModelRunner(Runner):
 
 
 class DeterministicPolicy(nn.Module):
-    """Observation preprocessing followed by the mean action of an actor."""
+    """Observation preprocessing followed by the mean action of an actor.
 
-    def __init__(self, actor: nn.Module, preprocessor: nn.Module | None = None):
+    With ``squash``, the actor returns the pre-tanh mean of a squashed Gaussian policy and the action is
+    its ``tanh``. Files saved before ``squash`` existed load with ``squash=False``; their squashed actors
+    end with their own ``Tanh``.
+    """
+
+    squash: bool = False
+
+    def __init__(self, actor: nn.Module, preprocessor: nn.Module | None = None, squash: bool = False):
         super().__init__()
         self.preprocessor = preprocessor
         self.actor = actor
+        self.squash = squash
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         if self.preprocessor is not None:
             obs = self.preprocessor(obs)
-        return self.actor(obs)
+        action = self.actor(obs)
+        return torch.tanh(action) if self.squash else action
 
 
 class Method:
@@ -198,17 +207,19 @@ class Method:
         return self.agent_cfg["models"]["policy"]["class"] == "SquashedGaussian"
 
     def new_mlp_actor(self) -> nn.Module:
-        """MLP mean network with the configured policy layers, bounded for a squashed Gaussian policy."""
-        actor = make_mlp(self.obs_dim, network_layers(self.agent_cfg, "policy"), self.action_dim)
-        if self._squashed_policy:
-            actor.append(nn.Tanh())
-        return actor.to(self.device)
+        """MLP mean network with the configured policy layers (pre-tanh mean for a squashed Gaussian policy)."""
+        return make_mlp(self.obs_dim, network_layers(self.agent_cfg, "policy"), self.action_dim).to(self.device)
+
+    def squash(self, mean: torch.Tensor) -> torch.Tensor:
+        """Deterministic action from an actor's output: ``tanh`` for a squashed Gaussian policy."""
+        return torch.tanh(mean) if self._squashed_policy else mean
 
     @staticmethod
     def ppo_policy(agent: Agent) -> DeterministicPolicy:
         """Deterministic policy of a PPO agent built by :meth:`build_ppo_agent`."""
         preprocessor = agent._state_preprocessor if isinstance(agent._state_preprocessor, nn.Module) else None
-        return DeterministicPolicy(agent.policy.actor, copy.deepcopy(preprocessor))
+        squash = isinstance(agent.policy, SquashedGaussianPolicy)
+        return DeterministicPolicy(agent.policy.actor, copy.deepcopy(preprocessor), squash)
 
     def collect_observations(self, agent: Agent, num_samples: int) -> torch.Tensor:
         """Observations visited by the agent's stochastic policy, continuing from the current env state."""

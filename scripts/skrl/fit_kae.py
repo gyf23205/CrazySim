@@ -44,7 +44,7 @@ import crazysim  # noqa: F401
 from crazysim.evaluation import load_policy
 from crazysim.methods.base import BEST_CHECKPOINT, POLICY_FILE
 from crazysim.methods.kae import train_kae
-from crazysim.methods.squashed import SquashedNormal
+from crazysim.methods.squashed import SquashedNormal, prior_to_pre_tanh
 from crazysim.tasks.direct.tracking.waypoint_env_cfg import WaypointTrackingEnvCfg
 
 
@@ -55,7 +55,8 @@ def collect_observations(env, policy, log_std: torch.Tensor, num_samples: int) -
     observations = []
     for _ in range(int(env.unwrapped.max_episode_length)):
         observations.append(obs.clone())
-        obs, _, _, _, _ = env.step(SquashedNormal(policy(obs), log_std).sample())
+        # policy.pt returns the action; the noise is applied to its pre-tanh value
+        obs, _, _, _, _ = env.step(SquashedNormal(prior_to_pre_tanh(policy(obs), 1e-6), log_std).sample())
     observations = torch.cat(observations)
     indices = torch.randperm(observations.shape[0], device=observations.device)[:num_samples]
     return observations[indices]

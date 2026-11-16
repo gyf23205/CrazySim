@@ -84,8 +84,33 @@ kae:
   action_coefficient: 0.9
   seed: 777
 
-# Settings of the transfer methods (scripts/skrl/train.py --method <name>); see skrl_ppo_cfg.yaml
+# Settings of the transfer methods (scripts/skrl/train.py --method <name>); see skrl_ppo_cfg.yaml.
+# residual, componet and kae_moe run frozen policies of earlier tasks on raw observations, so they need the
+# observation normalization off: append the Hydra override agent.agent.state_preprocessor=null to train.py.
+# Their network sizes follow the policy above ([64, 64]); kae_moe's KAE settings follow kae: above.
 methods:
+  residual:
+    hidden_dims: [64, 64]  # residual network
+  componet:
+    internal_hidden_dims: [64, 64]  # internal policy; the first entry is also the attention dimension
+  kae_moe:
+    padded_dim: 57  # observations and actions are padded with ones to this size before the KAE (>= observation size)
+    observable_dim: 16  # KAE latent size = experts per KAE
+    p: 1  # power of the Koopman operator in the expert outputs
+    residual_hidden_dims: [64, 64]  # MLP pathway
+    weight_hidden_dims: [32]  # per-KAE mode-weight networks
+    router_hidden_dims: [128]  # router between KAEs
+    gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
+    kae:
+      observation_samples: 30000  # observations recorded after training to fit the sampling distribution
+      hidden_dim: 64
+      sample_count: 15000
+      batch_size: 2048
+      epochs: 7500
+      learning_rate: 1.0e-04
+      kae_coefficient: 0.1
+      action_coefficient: 0.9
+      seed: 777
   fame:  # fast learner: the PPO agent above (models: and agent:); these are the meta-learner settings
     size_fast2meta: 100000  # states of the current task visited by its best fast learner, used for distillation
     size_meta: 500000  # states of earlier tasks

@@ -9,6 +9,11 @@ Stage 0 trains a plain MLP policy (wrapped in :class:`FirstModuleWrapper`). Stag
 CompoNet unit over the frozen units of stages 0..k-1. The unit's output attention head combines the
 earlier units' actions; its input attention head and internal policy add a correction whose last
 layer starts near zero, so a new unit starts close to the attention-weighted earlier policies.
+
+With a squashed Gaussian policy, units work as in ``cf_componet_real.py`` of ``Drone_Test_TRO``: ``phi``
+holds the earlier units' actions, and a unit's pre-tanh mean is the output attention's average of
+``atanh(phi)`` plus the internal policy's output. Its action, the ``tanh`` of that mean, is what it appends
+to ``phi``. Units saved before this existed load with ``pre_tanh=False`` and behave as before.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import Method, freeze
+from .squashed import prior_to_pre_tanh
 
 
 def get_position_encoding(seq_len: int, d: int, n: int = 10_000) -> np.ndarray:
@@ -38,8 +44,11 @@ class CompoNet(nn.Module):
 
     As the last unit, ``forward(s)`` runs the frozen previous units and returns ``(action, phi)``,
     where ``phi`` stacks the actions of all units ``(batch, num_units, out_dim)``. As a previous
-    unit, ``forward((phi, s))`` appends its action to ``phi`` and returns ``(phi, s)``.
+    unit, ``forward((phi, s))`` appends its action to ``phi`` and returns ``(phi, s)``. With
+    ``pre_tanh``, the last unit returns its pre-tanh mean in place of its action.
     """
+
+    pre_tanh: bool = False
 
     def __init__(
         self,
@@ -50,8 +59,10 @@ class CompoNet(nn.Module):
         internal_policy: nn.Module,
         device: torch.device | str,
         proj_bias: bool = True,
+        pre_tanh: bool = False,
     ):
         super().__init__()
+        self.pre_tanh = pre_tanh
         self.internal_policy = internal_policy
         self.att_temp = np.sqrt(hidden_dim)
         self.is_prev = False
@@ -103,11 +114,16 @@ class CompoNet(nn.Module):
         else:
             phi, s = s
 
-        out_head, _ = self._forward_headout(s, phi)
+        out_head, att_out = self._forward_headout(s, phi)
         logits, _ = self._get_internal_policy(s, torch.cat([phi, out_head], dim=1))
-        out = out_head[:, 0, :] + logits
+        if self.pre_tanh:
+            # average the frozen earlier actions in pre-tanh space with the same output attention
+            out = torch.matmul(att_out, prior_to_pre_tanh(phi))[:, 0, :] + logits
+            action = torch.tanh(out)
+        else:
+            out = action = out_head[:, 0, :] + logits
 
-        phi = torch.cat([phi, out[:, None, :]], dim=1)
+        phi = torch.cat([phi, action[:, None, :]], dim=1)
         if self.is_prev:
             return phi, s
         return out, phi
@@ -121,16 +137,23 @@ class CompoNet(nn.Module):
 
 
 class FirstModuleWrapper(nn.Module):
-    """Wraps a plain state-to-action network so that it can be the first CompoNet unit."""
+    """Wraps a plain state-to-action network so that it can be the first CompoNet unit.
 
-    def __init__(self, model: nn.Module):
+    With ``pre_tanh``, the network returns a pre-tanh mean and ``phi`` holds its ``tanh``.
+    """
+
+    pre_tanh: bool = False
+
+    def __init__(self, model: nn.Module, pre_tanh: bool = False):
         super().__init__()
         self.model = model
         self.is_prev = False
+        self.pre_tanh = pre_tanh
 
     def forward(self, x):
         pi = self.model(x)
-        phi = pi[:, None, :]  # (batch, 1, out_dim)
+        action = torch.tanh(pi) if self.pre_tanh else pi
+        phi = action[:, None, :]  # (batch, 1, out_dim)
         if self.is_prev:
             return phi, x
         return pi, phi
@@ -174,7 +197,7 @@ class Componet(Method):
 
     def start_stage(self, index, task, stage_dir):
         if not self.units:
-            unit = FirstModuleWrapper(self.new_mlp_actor())
+            unit = FirstModuleWrapper(self.new_mlp_actor(), pre_tanh=self._squashed_policy)
         else:
             unit = CompoNet(
                 previous_units=[copy.deepcopy(u) for u in self.units],
@@ -183,6 +206,7 @@ class Componet(Method):
                 out_dim=self.action_dim,
                 internal_policy=self._internal_policy(),
                 device=self.device,
+                pre_tanh=self._squashed_policy,
             ).to(self.device)
         return self.build_ppo_agent(ActionOnly(unit), stage_dir)
 
