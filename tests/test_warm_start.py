@@ -567,6 +567,28 @@ def test_fame_starts_from_the_shared_square_as_after_its_own_first_stage(real, s
     assert target.memory_meta.size == 32 and target.memory_fast2meta.size == 32
 
 
+def test_fame_meta_distilled_on_its_own_starts_a_warm_up_like_the_one_step_start(square_stage, tmp_path):
+    """scripts/skrl/distill_fame_meta.py: the meta learner distilled from the shared Square in a run of its own,
+    passed back with --square_meta_policy, is the meta learner of the one-step start, with a refilled buffer."""
+    states = torch.randn(8, 56)
+    checkpoint = square_stage["selected_checkpoint"]
+
+    torch.manual_seed(47)
+    one_step = METHODS["fame"](TensorEnv(), agent_cfg("fame"), str(tmp_path))
+    ws.seed_from_square(one_step, checkpoint=checkpoint, work_dir=str(tmp_path / "distilled"))
+    meta_policy = tmp_path / "distilled" / "meta_policy.pt"
+
+    torch.manual_seed(48)
+    method = METHODS["fame"](TensorEnv(), agent_cfg("fame"), str(tmp_path))
+    files = ws.seed_from_square(method, checkpoint=checkpoint, meta_policy=str(meta_policy))
+    assert files == {"checkpoint": checkpoint, "meta_policy": str(meta_policy)}
+    assert method.meta.training
+    with torch.no_grad():
+        torch.testing.assert_close(method.meta(states), one_step.meta(states))
+    torch.testing.assert_close(method.meta.log_std, one_step.meta.log_std)
+    assert method.meta_buffer.size == one_step.meta_buffer.size
+
+
 def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
     torch.manual_seed(13)
     env = TensorEnv()

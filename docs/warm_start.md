@@ -49,6 +49,14 @@ python -u scripts/skrl/validate_waypoint.py --headless --stage_dir $SQUARE/0_squ
 python scripts/skrl/export_waypoint_artifacts.py --stage_dir $SQUARE/0_square --drone_test_dir <Drone_Test_TRO>
 ```
 
+FAME's meta learner can be distilled from the shared Square in a run of its own, before any new shape. It writes
+`$SQUARE/0_square/fame_meta/meta_policy.pt` (and `distill_summary.json`), which FAME's warm-up then takes with
+`--square_checkpoint` and `--square_meta_policy` instead of distilling again:
+
+```bash
+python scripts/skrl/distill_fame_meta.py --headless --stage_dir $SQUARE/0_square env.trajectory_laps=1
+```
+
 FAME can instead train its own Square: the first command with `--method fame`, which also writes
 `meta_policy.pt`. With the same seed and settings it is the same PPO training as the shared Square, run a
 second time.
