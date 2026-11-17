@@ -276,7 +276,18 @@ The statements about FAME in this plan that describe its own PPO variant (own ac
 learning rates, entropy temperature, no normalization, `--square_policy`) no longer hold. The warm-up now
 writes FAME's bundle as the PPO fine-tuning bundle plus FAME's memory, and starts from
 `--square_checkpoint` and `--square_meta_policy` of FAME's own Square; see
-[docs/warm_start.md](docs/warm_start.md#fames-bundle). `Drone_Test_TRO` does not read this bundle yet.
+[docs/warm_start.md](docs/warm_start.md#fames-bundle). Since November 16, 2026 `Drone_Test_TRO` continues,
+consolidates and finalizes this bundle (`examples/setpoint/fame_ppo.py` there); checked without hardware and
+with a dry run, not on the drone.
+
+**Update, November 16, 2026: merge of master 4d17470.** Every method setting of the waypoint task is now
+Yifan's (`skrl_ppo_waypoint_cfg.yaml`): `[64, 64]` for the residual network, CompoNet's internal policy and
+KAE-MoE's MLP path, KAE latent size 16, router `[128]`, KAE batch size 2048. Every policy network returns
+its pre-tanh mean, and Residual, CompoNet and KAE-MoE compose earlier policies before the tanh. The
+statements in this plan about `[256, 128, 64]` method networks no longer hold. The handoff and
+`Drone_Test_TRO` follow the new policies and sizes for all five methods (`crazysim_*_v3` identifiers there;
+see the notice in [docs/warm_start.md](docs/warm_start.md)). Squares, KAEs, bundles and real results made
+before the merge were trained with the earlier policies.
 
 **Choices made while implementing, to confirm:**
 

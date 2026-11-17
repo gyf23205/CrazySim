@@ -16,6 +16,9 @@ Ported from ``less_leg_walking_1`` (``baselines/FAME/``, ``scripts/skrl/train_FA
 - Observation normalization (``agent.state_preprocessor: RunningStandardScaler``, as in the waypoint
   configuration): the meta learner has its own normalization, set before every distillation to the
   mean and variance of all states it is distilled on (this task's and the stored earlier ones).
+- Squashed Gaussian policy (waypoint configuration): the distillation matches the pre-tanh Gaussians, as
+  in ``cf_fame_real.py`` of ``Drone_Test_TRO``. Every learner squashes with the same ``tanh``, so this
+  matches the action distributions.
 
 Changes from the reference:
 
@@ -53,19 +56,44 @@ from .base import Method
 class MetaPolicy(nn.Module):
     """Meta learner: observation normalization (or none), mean network and state-independent log standard deviation.
 
-    Calling it returns the deterministic action, like a stage's ``policy.pt``.
+    Calling it returns the deterministic action, like a stage's ``policy.pt``. With ``squash``, the mean
+    network returns the pre-tanh mean and the action is its ``tanh``.
     """
 
-    def __init__(self, actor: nn.Module, log_std: torch.Tensor, preprocessor: nn.Module | None = None):
+    def __init__(
+        self, actor: nn.Module, log_std: torch.Tensor, preprocessor: nn.Module | None = None, squash: bool = False
+    ):
         super().__init__()
         self.preprocessor = preprocessor
         self.actor = actor
         self.log_std = nn.Parameter(log_std.detach().clone())
+        self.squash = squash
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+    def __setstate__(self, state):
+        # Used by torch.load and copy.deepcopy. The preprocessor is a submodule, kept in state["_modules"]:
+        # - files saved before observation normalization was supported have none;
+        # - files saved by the first version with normalization also hold a stray attribute
+        #   preprocessor=None, which would hide the submodule.
+        state.pop("preprocessor", None)
+        state["_modules"].setdefault("preprocessor", None)
+        # Files saved before ``squash`` existed end a squashed actor with its own Tanh. Removing it and
+        # squashing in forward gives the same actions, and the actor then returns the pre-tanh mean.
+        if "squash" not in state:
+            actor = state["_modules"]["actor"]
+            state["squash"] = isinstance(actor, nn.Sequential) and isinstance(actor[-1], nn.Tanh)
+            if state["squash"]:
+                del actor[-1]
+        super().__setstate__(state)
+
+    def mean(self, obs: torch.Tensor) -> torch.Tensor:
+        """Output of the mean network (the pre-tanh mean with ``squash``)."""
         if self.preprocessor is not None:
             obs = self.preprocessor(obs)
         return self.actor(obs)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        mean = self.mean(obs)
+        return torch.tanh(mean) if self.squash else mean
 
     def set_normalization(self, states: torch.Tensor):
         """Normalize observations with the mean and variance of ``states`` (no effect without normalization)."""
@@ -122,7 +150,7 @@ class Fame(Method):
         if self.meta is not None:
             # null: one episode, so that every episode can end within the evaluation
             steps = self.method_cfg["detection_steps"] or int(self.env.unwrapped.max_episode_length)
-            avg_fresh = self._evaluate(lambda obs: self._fast_mean(agent, obs), steps)
+            avg_fresh = self._evaluate(lambda obs: self.squash(self._fast_mean(agent, obs)), steps)
             avg_meta = self._evaluate(self.meta, steps)
             choice = "meta" if avg_meta > avg_fresh else "fresh"
             if choice == "meta":
@@ -172,7 +200,8 @@ class Fame(Method):
 
     @staticmethod
     def _fast_mean(agent: Agent, obs: torch.Tensor) -> torch.Tensor:
-        """Mean action of a PPO agent, with its observation normalization."""
+        """Mean network output of a PPO agent (the pre-tanh mean for a squashed policy), with its observation
+        normalization."""
         return agent.policy.actor(agent._state_preprocessor(obs))
 
     def _train_meta(self, new_states: torch.Tensor, agent: Agent):
@@ -187,6 +216,7 @@ class Fame(Method):
                 self.new_mlp_actor(),
                 torch.full((self.action_dim,), float(policy_cfg["initial_log_std"])),
                 copy.deepcopy(preprocessor) if isinstance(preprocessor, nn.Module) else None,
+                squash=self._squashed_policy,
             ).to(self.device)
         elif self.meta_buffer.size >= batch_size:
             previous_meta = copy.deepcopy(self.meta)
@@ -199,10 +229,11 @@ class Fame(Method):
         scheduler = ExponentialLR(optimizer, gamma=cfg["meta_lr_scheduler_gamma"])
         steps = max(1, max(self.meta_buffer.size, new_buffer.size) // batch_size - 1)
 
+        # means are mean network outputs: pre-tanh means for a squashed policy
         def wasserstein(states, teacher_mean, teacher_log_std):
             with torch.no_grad():
                 mean, std = teacher_mean(states), self._std(teacher_log_std)
-            m_mean, m_std = self.meta(states), self._std(self.meta.log_std)
+            m_mean, m_std = self.meta.mean(states), self._std(self.meta.log_std)
             return torch.mean(torch.square(m_mean - mean).sum(-1)) + torch.square(m_std - std).sum(-1)
 
         for epoch in range(cfg["epoch_meta"]):
@@ -211,7 +242,9 @@ class Fame(Method):
                 loss = wasserstein(new_buffer.sample(batch_size), lambda obs: self._fast_mean(agent, obs),
                                    agent.policy.log_std_parameter)
                 if previous_meta is not None:  # old knowledge: match the previous meta learner on past states
-                    loss = loss + wasserstein(self.meta_buffer.sample(batch_size), previous_meta, previous_meta.log_std)
+                    loss = loss + wasserstein(
+                        self.meta_buffer.sample(batch_size), previous_meta.mean, previous_meta.log_std
+                    )
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()

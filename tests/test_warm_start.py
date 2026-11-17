@@ -29,7 +29,8 @@ from crazysim.methods.kae import KoopmanAutoencoder
 
 ROLLOUTS, NUM_ENVS = 4, 2
 SHARED = ("kae_moe", "finetune", "residual", "componet")
-"""Methods that start from the shared Square and that ``Drone_Test_TRO`` imports."""
+"""Methods that start from the shared Square. FAME starts from its own."""
+ALL = SHARED + ("fame",)
 
 
 @pytest.fixture(scope="module")
@@ -178,9 +179,13 @@ def warm_up(method, env, tmp_path, task, index, **parents):
 
 
 def simulation_distribution(agent, states):
-    """Mean action and log standard deviation of the learner in this repository."""
+    """Mean action and log standard deviation of the learner in this repository.
+
+    The mean network returns the pre-tanh mean; the mean action is its ``tanh``.
+    """
     with torch.no_grad():
-        return agent.policy.actor(agent._state_preprocessor(states, train=False)), agent.policy.log_std_parameter
+        pre_tanh_mean = agent.policy.actor(agent._state_preprocessor(states, train=False))
+        return torch.tanh(pre_tanh_mean), agent.policy.log_std_parameter
 
 
 def check_real_import(real, method_name, agent, policy, info, task):
@@ -291,13 +296,19 @@ def finalize_real_stage(real, source, method_name, shape, next_shape, tmp_path):
     if method_name == "kae_moe":
         next_stage["appended_kae"] = real.describe_actor(source.policy.moe_core.kae.blocks[-1])
         next_stage["appended_kae_record"] = {"path": "fitted.pth", "sha256": real._digest(next_stage["appended_kae"])}
+    if method_name == "fame":
+        # as run_real_stage and finalize_stage.py: the exported learner is the one before the consolidation,
+        # which happens once and gives the state the next shape starts from
+        source.end_of_shape_segment()
+        next_stage["consolidated_fame_state"] = source.consolidated_state()
+        next_stage["consolidation_count"] = 1
     finalized = real.update_transfer_bundle(
         path, next_stage=next_stage, output_path=tmp_path / f"real_{shape}_finalized.pt"
     )
     return tb.read_bundle(finalized)
 
 
-@pytest.mark.parametrize("method_name", SHARED)
+@pytest.mark.parametrize("method_name", ALL)
 @pytest.mark.parametrize("shapes", [("circle", "triangle"), ("triangle", "figure8")])
 def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, tmp_path, method_name, shapes):
     torch.manual_seed(17)
@@ -319,6 +330,9 @@ def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, t
             )
         if method_name == "kae_moe":
             assert len(method.experts) == len(completed.moe_core.kae.blocks) + 1
+        if method_name == "fame":  # the meta learner that the real side consolidated
+            torch.testing.assert_close(method.meta(states), source.meta(states), rtol=2e-5, atol=3e-6)
+            torch.testing.assert_close(method.meta_buffer.all(), source.memory_meta.all())
 
     index = tb.SHAPES.index(shape) + 1
     agent, policy, info = warm_up(method, env, tmp_path, next_shape, index, parent=parent)
@@ -361,14 +375,14 @@ def test_task_settings_match_what_the_real_side_compares(real, task):
 def test_bundle_checksum_and_parent_checks(real, square_stage, tmp_path):
     torch.manual_seed(19)
     env = TensorEnv()
-    method = METHODS["residual"](env, agent_cfg("residual"), str(tmp_path))
+    method = METHODS["finetune"](env, agent_cfg("finetune"), str(tmp_path))
     seed_square(method, square_stage)
     _, _, info = warm_up(method, env, tmp_path, "circle", 1)
     bundle = tb.read_bundle(info["transfer_bundle"])
     unsealed = {key: value for key, value in bundle.items() if key != "_source"}
     assert tb.digest(unsealed) == real._digest(unsealed)
     with pytest.raises(ValueError, match="finished real stage"):
-        ws.check_parent_bundle(bundle, "residual", "triangle")  # a warm-up is not a parent
+        ws.check_parent_bundle(bundle, "finetune", "triangle")  # a warm-up is not a parent
     with pytest.raises(ValueError, match="--square_checkpoint, --square_meta_policy"):  # FAME has its own Square
         fame = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
         ws.seed_from_square(fame, checkpoint=square_stage["selected_checkpoint"])
@@ -444,6 +458,51 @@ def test_the_best_checkpoint_within_the_budget_is_handed_over(real, square_stage
 # -- FAME: this repository only ------------------------------------------------------------------------------
 
 
+LAST_LAYERS = {
+    "finetune": (lambda actor: actor[4], lambda policy: policy.policy_layer[0]),
+    "residual": (lambda actor: actor.residual[-1], lambda policy: policy.residual_core.residual_network[-1]),
+    "componet": (lambda actor: actor.unit.internal_policy[-1], lambda policy: policy.componet_core.internal_policy[-1]),
+    "kae_moe": (lambda actor: actor.mlp_network[-1], lambda policy: policy.moe_core.head.mlp_network[-1]),
+}
+"""Last trainable layer before the tanh: in the mean network here, and in the policy of ``Drone_Test_TRO``."""
+
+
+@pytest.mark.parametrize("method_name", SHARED)
+def test_real_policy_samples_as_this_repository_without_a_clamp(real, square_stage, tmp_path, method_name):
+    """Likelihoods and their gradients agree on both sides, also where the mean action saturates.
+
+    With the earlier clamp between the mean network and the distribution, a saturated mean had a zero gradient.
+    """
+    torch.manual_seed(43)
+    env = TensorEnv()
+    method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
+    seed_square(method, square_stage)
+    agent, _, info = warm_up(method, env, tmp_path, "circle", 1)
+    bundle = real.load_transfer_bundle(info["transfer_bundle"])
+    assert bundle["manifest"]["distribution"]["kind"] == "pre_tanh_mean_tanh_gaussian_v1"
+    target = real._agent(method_name, bundle)
+    real.restore_transfer_agent(target, bundle)
+
+    ours, theirs = LAST_LAYERS[method_name][0](agent.policy.actor), LAST_LAYERS[method_name][1](target.policy)
+    with torch.no_grad():  # mean actions that round to +-1 in single precision
+        for layer in (ours, theirs):
+            layer.bias.add_(torch.tensor([80.0, -80.0, 0.0]))
+    states = torch.randn(7, 56)
+    actions = torch.linspace(-0.9, 0.9, 21).reshape(7, 3)
+    with torch.no_grad():
+        normalized = agent._state_preprocessor(states, train=False)
+        torch.testing.assert_close(normalized, target._state_preprocessor(states, train=False))
+    _, mine, outputs = agent.policy.act({"states": normalized, "taken_actions": actions})
+    _, yours, _ = target.policy.act({"states": normalized, "taken_actions": actions})
+    assert (outputs["mean_actions"][:, :2].abs() == 1.0).all()
+    torch.testing.assert_close(yours, mine, rtol=2e-5, atol=3e-4)
+    ours.bias.grad = theirs.bias.grad = None  # training left gradients behind
+    mine.sum().backward()
+    yours.sum().backward()
+    assert torch.isfinite(theirs.bias.grad).all() and (theirs.bias.grad[:2].abs() > 0).all()
+    torch.testing.assert_close(theirs.bias.grad, ours.bias.grad, rtol=1e-4, atol=1e-4)
+
+
 def fame_square(env, tmp_path):
     """FAME after its own Square stage, started from that stage's files as ``--square_...`` does."""
     stage = finished_stage(METHODS["fame"](env, agent_cfg("fame"), str(tmp_path)), env, tmp_path, "square_fame")
@@ -475,7 +534,7 @@ def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
     bundle = tb.read_bundle(info["transfer_bundle"])
     manifest, modules = bundle["manifest"], bundle["agent_modules"]
     assert manifest["equations"] == tb.EQUATIONS["fame"] == bundle["architecture"]["policy"]["equations"]
-    assert manifest["distribution"]["kind"] == "bounded_center_inverse_tanh_gaussian_v1"
+    assert manifest["distribution"]["kind"] == "pre_tanh_mean_tanh_gaussian_v1"
     assert manifest["simulation_parent"] == {"shape": "square", "files": files}
     assert manifest["preserved_method_memory"] == ["fast2meta", "meta"]
     assert bundle["agent_configuration"]["settings"]["fame_core"]["epoch_meta"] == 1
@@ -537,6 +596,86 @@ def test_fame_next_shape_starts_from_the_consolidated_state_of_the_parent(tmp_pa
         ws.restore_fame_memory(restored, {**state, "version": 2})
     with pytest.raises(ValueError, match="observation normalization"):
         ws.restore_fame_memory(restored, {**state, "meta_state_preprocessor": None})
+
+
+def test_fame_chain_circle_real_triangle_real(real, tmp_path):
+    """FAME's own Square -> simulation Circle -> real Circle (trained, consolidated and finalized there) ->
+    simulation Triangle -> real Triangle."""
+    torch.manual_seed(31)
+    env = TensorEnv()
+    method, files = fame_square(env, tmp_path)
+    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
+    circle, target = check_real_import(real, "fame", agent, policy, info, "circle")  # one real update included
+
+    # the real learner is the PPO fine-tuning learner with FAME's memory as it was handed over
+    assert type(target).__name__ == "RealFamePPOAgent" and type(target.policy).__name__ == "CrazySimWaypointPolicy"
+    states = torch.randn(6, 56)
+    with torch.no_grad():
+        torch.testing.assert_close(target.meta(states), method.meta(states), rtol=2e-5, atol=3e-6)
+    torch.testing.assert_close(target.meta.log_std, method.meta.log_std)
+    torch.testing.assert_close(target.memory_meta.all(), method.meta_buffer.all())
+    # 32 simulated Circle states filled the buffer; each real transition replaced the oldest of them
+    handed = circle["agent_modules"]["fame_memory"]["fast2meta"]["data"]
+    assert target.memory_fast2meta.size == 32 and target.memory_fast2meta.index == ROLLOUTS
+    torch.testing.assert_close(target.memory_fast2meta.data[ROLLOUTS:], handed[ROLLOUTS:])
+    assert not torch.equal(target.memory_fast2meta.data[:ROLLOUTS], handed[:ROLLOUTS])
+
+    parent = finalize_real_stage(real, target, "fame", "circle", "triangle", tmp_path)
+    assert parent["manifest"]["parent"]["artifact_id"] == circle["manifest"]["artifact_id"]
+    assert parent["manifest"]["equations"] == tb.EQUATIONS["fame"]
+    # the finalized bundle keeps the learner before the consolidation; the next shape gets the state after it
+    assert parent["agent_modules"]["fame_memory"]["fast2meta"]["size"] == 32
+    state = parent["manifest"]["next_stage"]["consolidated_fame_state"]
+    assert "fast2meta" not in state and state["meta"]["size"] == 64  # Square and Circle
+
+    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+    ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
+    with torch.no_grad():
+        torch.testing.assert_close(method.meta(states), target.meta(states), rtol=2e-5, atol=3e-6)
+    torch.testing.assert_close(method.meta.log_std, target.meta.log_std)
+    torch.testing.assert_close(method.meta_buffer.all(), target.memory_meta.all())
+    torch.testing.assert_close(method.meta.preprocessor.running_variance, target.meta.preprocessor.running_variance)
+
+    agent, policy, info = warm_up(method, env, tmp_path, "triangle", 2, parent=parent)
+    assert agent.detection["choice"] in ("meta", "fresh")
+    triangle, target = check_real_import(real, "fame", agent, policy, info, "triangle")
+    assert triangle["manifest"]["parent"]["artifact_id"] == parent["manifest"]["artifact_id"]
+    assert target.memory_meta.size == 64 and target.memory_fast2meta.size == 32
+
+
+def test_fame_consolidation_on_the_real_side_is_the_distillation_of_this_repository(real, tmp_path):
+    """The same learner, states and random numbers give the same meta learner as ``Fame._train_meta``."""
+    torch.manual_seed(37)
+    env = TensorEnv()
+    method, files = fame_square(env, tmp_path)
+    agent, _, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
+    bundle = real.load_transfer_bundle(info["transfer_bundle"])
+    target = real._agent("fame", bundle)
+    real.restore_transfer_agent(target, bundle)
+    task_states = bundle["agent_modules"]["fame_memory"]["fast2meta"]["data"]
+    assert method.meta_buffer.size >= method.method_cfg["meta_batch_size"]  # the previous meta learner is a teacher
+    method.method_cfg["epoch_meta"] = target._fame_cfg["epoch_meta"] = 4
+    assert {key: target._fame_cfg[key] for key in ("lr_meta", "meta_batch_size", "meta_lr_scheduler_gamma")} == {
+        key: method.method_cfg[key] for key in ("lr_meta", "meta_batch_size", "meta_lr_scheduler_gamma")
+    }
+    states = torch.randn(9, 56)
+    with torch.no_grad():
+        before = method.meta(states).clone()
+
+    torch.manual_seed(41)
+    method._train_meta(task_states.clone(), agent)
+    torch.manual_seed(41)
+    result = target._train_meta(task_states.clone())
+
+    assert result["matched_previous_meta"] and result["steps_per_epoch"] == 7
+    with torch.no_grad():
+        assert not torch.allclose(method.meta(states), before, atol=1e-3)  # the distillation changed it
+        torch.testing.assert_close(target.meta(states), method.meta(states), rtol=2e-5, atol=3e-6)
+    torch.testing.assert_close(target.meta.log_std, method.meta.log_std, rtol=2e-5, atol=3e-6)
+    for name in ("running_mean", "running_variance", "current_count"):
+        torch.testing.assert_close(
+            getattr(target.meta.preprocessor, name), getattr(method.meta.preprocessor, name), check_dtype=False
+        )
 
 
 def test_fame_hands_over_the_best_checkpoint_within_the_budget(tmp_path):

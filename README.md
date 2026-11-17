@@ -193,9 +193,14 @@ firmware controller, instead of thrusts. Results and every difference from that 
 Waypoint tasks: `square`, `circle`, `triangle`, `figure8` (shapes of `Drone_Test_TRO`), and `rectangle`, `star`,
 `vertical_circle` (the shapes of the continual-learning sequence, 1.5x larger like the circle; the vertical circle
 has radius 0.6 m around 1.0 m height). All are flown at 0.25 m/s, two laps per episode. Continual learning on
-waypoint control works with `scratch`, `finetune` and `fame`; `residual`, `componet` and `kae_moe` would need
-`agent.state_preprocessor: null` and their `methods:` settings in
-[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml):
+waypoint control works with every method. `residual`, `componet` and `kae_moe` run frozen policies of earlier tasks
+on raw observations, so they need the observation normalization of
+[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml) off:
+append the Hydra override `agent.agent.state_preprocessor=null`. As in `Drone_Test_TRO`, every method's network
+returns the pre-tanh mean `u` of the tanh-squashed Gaussian policy and the action is `tanh(u)`, so no clamp zeroes
+the policy gradient: `residual` adds its residual to `atanh` of the base action, `componet` averages `atanh` of the
+earlier units' actions, and the `kae_moe` blend is `u` itself. Example:
+`python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method kae_moe --headless --tasks circle rectangle agent.agent.state_preprocessor=null`.
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method fame --headless \

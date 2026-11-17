@@ -12,6 +12,10 @@ to that stage's (best) policy (:mod:`.kae`). Stage k trains a policy that blends
 A gate network outputs ``g`` in [0, 1] and the action is ``g * kae_action + (1 - g) * mlp_action``.
 The KAEs are frozen; all networks above are trained. The value network and the action noise are new
 at every stage.
+
+With a squashed Gaussian policy, the blend is the pre-tanh mean and the action is its ``tanh``, as in
+``expanding_kae_moe.py`` of ``Drone_Test_TRO``. The KAEs are fitted to the earlier policies' actions,
+so a KAE that reproduces an earlier policy gives ``tanh`` of its action, not the action itself.
 """
 
 from __future__ import annotations

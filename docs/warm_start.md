@@ -9,11 +9,12 @@ Everything here uses the waypoint task (`CrazySim-TrackingWaypoint-Direct-v0`: 5
 and the shapes `square`, `circle`, `triangle` and `figure8`. Simulation commands need the Isaac Lab
 environment. The methods are `kae_moe`, `finetune` (PPO fine-tuning), `residual`, `componet` and `fame`.
 
-> **FAME is not ready for a real flight.** Since November 15, 2026 FAME's fast learner here is the PPO agent
-> of the other methods, and its bundle changed with it (see [FAME's bundle](#fames-bundle)).
-> `Drone_Test_TRO` still implements FAME's earlier PPO variant and refuses the new bundle by its equation
-> identifier. The simulation side below works; the real stage and its finalization need the matching
-> change in `Drone_Test_TRO`.
+> **State after the merge of master 4d17470 (November 16, 2026).** That commit makes every policy network
+> return its pre-tanh mean (the action is its `tanh`, without a clamp), composes Residual, CompoNet and
+> KAE-MoE before the tanh, and sets the waypoint sizes of all methods (`[64, 64]` method networks). The
+> handoff and `Drone_Test_TRO` follow it for all five methods; both checkouts must be at least that
+> recent. Bundles, squares, KAEs and real results from before it use the earlier policies and are
+> refused or should be made again. Checked without hardware and with a dry run, not on the drone.
 
 ## What a warm-up does
 
@@ -161,6 +162,13 @@ within seven laps: one lap per update is too little data for that step size. PPO
 real stage's final rate back to simulation, where the adaptive schedule raises it again within a few
 updates; the other methods, FAME included, start each shape with a new optimizer.
 
+**Action noise.** Every policy samples `tanh(z)` with `z ~ Normal(u, std)` around its pre-tanh mean `u`,
+on both sides, and the bundle records this as `pre_tanh_mean_tanh_gaussian_v1`. `u` is the output of the
+last linear layer (PPO fine-tuning, FAME's fast learner), `atanh(base) + residual` (Residual), the output
+attention's average of `atanh` of the earlier actions plus the internal policy (CompoNet), or the blend of
+the KAE and MLP pathways (KAE-MoE). A frozen earlier policy is passed on as its action. A bundle written
+before 4d17470 records `bounded_center_inverse_tanh_gaussian_v1` and is refused.
+
 **Observation normalization.** PPO fine-tuning normalizes observations and keeps updating the statistics.
 Residual, CompoNet and KAE-MoE do not: their frozen earlier policies take raw observations and keep their
 own normalizer, so `train.py` turns it off for these methods. FAME normalizes like PPO fine-tuning; its
@@ -173,7 +181,7 @@ mismatch.
 ## FAME's bundle
 
 FAME's bundle is the bundle of PPO fine-tuning (same policy and value descriptions, optimizer, normalizers
-and schedule) with the equation identifier `crazysim_fame_83c30e9_v3` and one more entry,
+and schedule) with the equation identifier `crazysim_fame_4d17470_v4` and one more entry,
 `agent_modules.fame_memory`:
 
 | Entry | Content |
@@ -189,11 +197,13 @@ configuration). The way back reads `manifest.next_stage.consolidated_fame_state`
 bundle: the same entries without `fast2meta`, after the consolidation that ends the shape. A state of
 version 2 (the earlier variant) is refused.
 
-This layout is defined here and is not yet implemented in `Drone_Test_TRO`. To continue a FAME bundle,
-the real side needs FAME on the PPO learner it already runs for fine-tuning: restore `fame_memory`, add
-the flown states to `fast2meta`, and at finalization distill the meta learner as `Fame._train_meta` does
-(normalizer set to the statistics of all distillation states, then the Wasserstein-like loss on mean and
-standard deviation).
+`Drone_Test_TRO` continues this bundle with FAME on the PPO learner it runs for fine-tuning
+(`examples/setpoint/fame_ppo.py`, `TRANSFER_BUNDLE.md` there): it restores `fame_memory`, adds the state
+of every accepted real transition to `fast2meta`, and when the shape ends distills the meta learner once
+as `Fame._train_meta` does (normalizer set to the statistics of all distillation states, then the
+Wasserstein-like loss on pre-tanh mean and standard deviation). `fast2meta` holds `size_fast2meta` simulated
+states when it arrives, so each real state replaces the oldest simulated one: with the default of
+100000, the distillation states stay almost entirely simulated unless the real stage is very long.
 
 ## Hardware-free checks
 
@@ -204,11 +214,12 @@ python -m pytest tests
 The checks train a few steps on the CPU with the unchanged method classes and a small tensor
 environment, write bundles, and load them with the loader of the `Drone_Test_TRO` checkout next to this
 repository (`DRONE_TEST_ROOT` if it is elsewhere). They need PyTorch, skrl, Gymnasium, PyYAML and pytest,
-not Isaac Sim. For `kae_moe`, `finetune`, `residual` and `componet` they compare the mean action and the
-action noise of the two learners on the same observations, take a training step on the real side, and
-cover Square to Circle, a start from a finalized real stage, a two-shape chain and the selection of an
-earlier best checkpoint. FAME is checked on this side only: the bundle it writes, the selection of the
-best checkpoint, and the start of the next shape from a stand-in for the finalized real bundle.
+not Isaac Sim. For all five methods they compare the mean action and the action noise of the two learners
+on the same observations, take a training step on the real side, and cover Square to Circle, a start from
+a finalized real stage, a two-shape chain and the selection of an earlier best checkpoint. They also
+compare likelihoods and their gradients where the mean action saturates. For FAME they compare the meta
+learner and its buffers on both sides, and check that the consolidation of `Drone_Test_TRO` gives the same
+meta learner as `Fame._train_meta` here from the same states and random numbers.
 
 They do not run physics and say nothing about tracking quality or flight. `scripts/skrl/train.py` itself
 is not covered, since it needs Isaac Sim.

@@ -25,15 +25,16 @@ ARTIFACT_TYPE = "simulation_real_continuation"
 BUNDLE_FILE = "transfer_bundle.pt"
 SHAPES = ("square", "circle", "triangle", "figure8", "skewed_figure8")
 EQUATIONS = {
-    "kae_moe": "crazysim_kae_moe_v2",
-    "residual": "crazysim_residual_v2",
-    "componet": "crazysim_componet_v2",
+    "kae_moe": "crazysim_kae_moe_v3",
+    "residual": "crazysim_residual_v3",
+    "componet": "crazysim_componet_v3",
     "finetune": "crazysim_waypoint_ppo_v1",
-    "fame": "crazysim_fame_83c30e9_v3",
+    "fame": "crazysim_fame_4d17470_v4",
 }
 """Equation identifier of each method. ``Drone_Test_TRO`` requires the same one.
 
-FAME's names the commit of this repository that made its fast learner the PPO agent of the other methods.
+FAME's names the commit of this repository whose FAME it describes: the fast learner is the PPO agent of the
+other methods (since 83c30e9) and the distillation matches pre-tanh means (since 4d17470).
 ``crazysim_fame_585e33a_v2`` was FAME's own PPO variant (state-dependent noise, entropy temperature); a
 bundle of one cannot be read as the other."""
 OBSERVATION_SPECIFICATION = {
@@ -137,9 +138,12 @@ def dependency_records(policy_node: Mapping) -> list[dict]:
 
 
 def distribution_contract(method: str, policy_node: Mapping) -> dict:
-    """How the action noise is applied, as ``Drone_Test_TRO`` records it. The same for every method."""
+    """How the action noise is applied, as ``Drone_Test_TRO`` records it. The same for every method.
+
+    A policy samples ``tanh(z)`` with ``z ~ Normal(u, std)`` around its pre-tanh mean ``u``.
+    """
     return {
-        "kind": "bounded_center_inverse_tanh_gaussian_v1",
+        "kind": "pre_tanh_mean_tanh_gaussian_v1",
         "epsilon": 1e-6,
         "min_log_std": policy_node["min_log_std"],
         "log_probability": "inverse_tanh_with_tanh_jacobian",

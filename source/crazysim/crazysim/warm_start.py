@@ -199,31 +199,41 @@ def controller_from_node(node: Mapping, device="cpu") -> nn.Module:
         base = controller_from_node(node["base"], device)
         residual = make_mlp(OBS_DIM, _hidden_dims(node["networks"]["residual"]), ACTION_DIM)
         residual.load_state_dict(_strip(core, "residual_network."))
-        module = ComposedActor(base, residual)
+        # the composed network returns its pre-tanh mean; the controller is its action
+        module = DeterministicPolicy(ComposedActor(base, residual, pre_tanh=True), squash=True)
         module._chain_depth = node["chain_depth"]
         prefix = "residual_core." if kind == "ResidualPolicy" else ""
-        names = {"base." + key: prefix + "base." + value for key, value in base._bundle_names.items()}
-        names.update({"residual." + key: prefix + "residual_network." + key for key, _ in residual.named_parameters()})
+        names = {"actor.base." + key: prefix + "base." + value for key, value in base._bundle_names.items()}
+        names.update(
+            {"actor.residual." + key: prefix + "residual_network." + key for key, _ in residual.named_parameters()}
+        )
     elif kind in ("CompoNetPolicy", "CompoNetCore"):
         core = _strip(state, "componet_core.") if kind == "CompoNetPolicy" else state
         priors = [controller_from_node(prior, device) for prior in node["priors"]]
         hidden_dim = node["hidden_dim"]
         internal = make_mlp(OBS_DIM + hidden_dim, _hidden_dims(node["networks"]["internal_policy"]), ACTION_DIM)
-        unit = CompoNet([PriorUnit(prior) for prior in priors], OBS_DIM, hidden_dim, ACTION_DIM, internal, device)
+        unit = CompoNet(
+            [PriorUnit(prior) for prior in priors], OBS_DIM, hidden_dim, ACTION_DIM, internal, device, pre_tanh=True
+        )
         own = {key: value for key, value in core.items() if not key.startswith("previous_units.")}
         if unit.pe0 is None:
             own.pop("pe0", None)
         result = unit.load_state_dict(own, strict=False)
         if result.unexpected_keys or any(not key.startswith("previous_units.") for key in result.missing_keys):
             raise ValueError("The CompoNet description does not match the attention heads and internal policy.")
-        module = ActionOnly(unit)
+        # the unit returns its pre-tanh mean; the controller is its action
+        module = DeterministicPolicy(ActionOnly(unit), squash=True)
         prefix = "componet_core." if kind == "CompoNetPolicy" else ""
         names = {
-            "unit." + key: prefix + key for key, _ in unit.named_parameters() if not key.startswith("previous_units.")
+            "actor.unit." + key: prefix + key
+            for key, _ in unit.named_parameters()
+            if not key.startswith("previous_units.")
         }
         for index, prior in enumerate(priors):
             for key, value in prior._bundle_names.items():
-                names[f"unit.previous_units.{index}.controller.{key}"] = f"{prefix}previous_units.{index}.{value}"
+                names[f"actor.unit.previous_units.{index}.controller.{key}"] = (
+                    f"{prefix}previous_units.{index}.{value}"
+                )
     elif kind in ("ExpandingKaeMoEPolicy", "ExpandingKaeMoECore"):
         core = _strip(state, "moe_core.") if kind == "ExpandingKaeMoEPolicy" else state
         bank, networks = node["kae"], node["networks"]
@@ -236,15 +246,21 @@ def controller_from_node(node: Mapping, device="cpu") -> nn.Module:
             "router_hidden_dims": _hidden_dims(networks["router"]),
             "gating_hidden_dims": _hidden_dims(networks["gate"]),
         }
-        module = MoEActor(experts, OBS_DIM, ACTION_DIM, bank["blocks"][0]["padded_dim"], cfg)
-        result = module.load_state_dict(_strip(core, "head."), strict=False)
+        blend = MoEActor(experts, OBS_DIM, ACTION_DIM, bank["blocks"][0]["padded_dim"], cfg)
+        result = blend.load_state_dict(_strip(core, "head."), strict=False)
         if result.unexpected_keys or any(not key.startswith("kaes.") for key in result.missing_keys):
             raise ValueError("The KAE-MoE description does not match the router, gate, mode-weight and MLP networks.")
+        # the blend is the pre-tanh mean; the controller is its action
+        module = DeterministicPolicy(blend, squash=True)
         prefix = "moe_core." if kind == "ExpandingKaeMoEPolicy" else ""
-        names = {key: prefix + "head." + key for key, _ in module.named_parameters() if not key.startswith("kaes.")}
+        names = {
+            "actor." + key: prefix + "head." + key
+            for key, _ in blend.named_parameters()
+            if not key.startswith("kaes.")
+        }
         for index, expert in enumerate(experts):
             for key, value in expert._bundle_names.items():
-                names[f"kaes.{index}.{key}"] = f"{prefix}kae.blocks.{index}.{value}"
+                names[f"actor.kaes.{index}.{key}"] = f"{prefix}kae.blocks.{index}.{value}"
     else:
         raise ValueError(f"Unsupported policy description of kind {kind!r}.")
     return _remember(module.to(device), node, names)
@@ -345,6 +361,11 @@ def describe_controller(module: nn.Module) -> tuple[dict, dict]:
         return tb.plain(module._bundle_node), dict(module._bundle_names)
     if isinstance(module, PriorUnit):
         return describe_controller(module.controller)
+    composed = module.unit if isinstance(module, ActionOnly) else module
+    if isinstance(composed, (ComposedActor, CompoNet)) and not composed.pre_tanh:
+        raise ValueError(
+            "A transfer bundle describes policies that are composed before the tanh (squashed Gaussian policy)."
+        )
     if isinstance(module, ComposedActor):
         base, base_names = describe_controller(module.base)
         state = {**_prefix(base["state"], "base."), **_prefix(module.residual.state_dict(), "residual_network.")}
@@ -676,7 +697,8 @@ def restore_fame_memory(method: Method, record: Mapping):
 
         preprocessor = RunningStandardScaler(size=method.env.observation_space, device=method.device)
         preprocessor.load_state_dict(saved)
-    method.meta = MetaPolicy(actor, policy["log_std_parameter"], preprocessor).to(method.device).train()
+    method.meta = MetaPolicy(actor, policy["log_std_parameter"], preprocessor, squash=method._squashed_policy)
+    method.meta = method.meta.to(method.device).train()
     method.meta_buffer = _buffer_from_record(record["meta"], method.device)
 
 
@@ -758,7 +780,13 @@ def describe_learner(method_name: str, agent) -> tuple[dict, dict]:
             state,
             min_log_std=min_log_std,
             equations=tb.EQUATIONS[method_name],
-            networks={"hidden": _layout(actor[:4]), "output": _layout(actor[4:]), "output_transform": "as_declared"},
+            # the mean network ends with its last linear layer (pre-tanh mean); the policy of Drone_Test_TRO
+            # keeps that layer in a Sequential with the tanh that gives the deterministic action
+            networks={
+                "hidden": _layout(actor[:4]),
+                "output": [_layout(actor[4]), {"kind": "Tanh"}],
+                "output_transform": "as_declared",
+            },
         )
         return node, names
     core, core_names = describe_controller(policy.actor)

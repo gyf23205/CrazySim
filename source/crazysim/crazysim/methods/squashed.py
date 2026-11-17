@@ -1,7 +1,9 @@
 """Tanh-squashed Gaussian policy for skrl PPO.
 
 Copy of ``SquashedNormal`` and ``SquashedGaussianMixin`` in ``examples/setpoint/expanding_kae_moe.py`` of
-``Drone_Test_TRO``. The mean network outputs the bounded mean action; the noise is applied before the tanh.
+``Drone_Test_TRO``. The mean network outputs the pre-tanh mean ``u``; PPO samples ``tanh(z)`` with
+``z ~ Normal(u, std)`` and the deterministic action is ``tanh(u)``. No clamp lies between a trainable
+parameter and the action, so the policy gradient is never exactly zero.
 """
 
 from __future__ import annotations
@@ -13,16 +15,32 @@ import torch.nn.functional as F
 
 from skrl.models.torch import Model
 
+PRIOR_ATANH_EPSILON = 1e-3
+"""Margin of :func:`prior_to_pre_tanh`. It caps ``|atanh|`` at about 3.8, so one saturated frozen policy
+cannot dominate a pre-tanh sum."""
+
+
+def prior_to_pre_tanh(action: torch.Tensor, epsilon: float = PRIOR_ATANH_EPSILON) -> torch.Tensor:
+    """Pre-tanh value of a frozen policy's bounded action.
+
+    Use it only on outputs of frozen modules: its clamp would zero the gradient of a trainable one.
+    """
+    return torch.atanh(action.clamp(-1.0 + epsilon, 1.0 - epsilon))
+
 
 class SquashedNormal:
-    """Tanh-squashed diagonal Normal with stable inverse likelihoods."""
+    """Tanh-squashed diagonal Normal: ``action = tanh(z)``, ``z ~ Normal(u, std)``.
 
-    def __init__(self, bounded_mean: torch.Tensor, log_std: torch.Tensor, *, epsilon: float = 1e-6):
+    It takes the pre-tanh mean ``u`` directly. Building it from ``tanh(u)`` would need ``atanh`` of a
+    clamped value, whose gradient is zero once ``tanh(u)`` rounds to the clamp bound.
+    """
+
+    def __init__(self, pre_tanh_mean: torch.Tensor, log_std: torch.Tensor, *, epsilon: float = 1e-6):
+        # epsilon only guards atanh of taken actions (data) in log_prob
         self.epsilon = float(epsilon)
-        self.bounded_mean = bounded_mean.clamp(-1.0, 1.0)
-        safe_bounded_mean = self.bounded_mean.clamp(-1.0 + epsilon, 1.0 - epsilon)
-        self.pre_tanh_loc = torch.atanh(safe_bounded_mean)
-        self.scale = log_std.exp().expand_as(bounded_mean)
+        self.pre_tanh_loc = pre_tanh_mean
+        self.bounded_mean = torch.tanh(pre_tanh_mean)
+        self.scale = log_std.exp().expand_as(pre_tanh_mean)
         self.base_dist = torch.distributions.Normal(self.pre_tanh_loc, self.scale)
         self.has_rsample = True
 
@@ -64,7 +82,10 @@ class SquashedNormal:
 
 
 class SquashedGaussianPolicy(Model):
-    """Squashed Gaussian policy with a state-independent log standard deviation around a bounded mean network."""
+    """Squashed Gaussian policy with a state-independent log standard deviation.
+
+    ``actor`` returns the pre-tanh mean ``u``; ``mean_actions`` is the deterministic action ``tanh(u)``.
+    """
 
     def __init__(self, observation_space, action_space, device, actor: nn.Module, policy_cfg: dict):
         Model.__init__(self, observation_space, action_space, device)
@@ -75,14 +96,14 @@ class SquashedGaussianPolicy(Model):
         self._num_samples = 0
 
     def act(self, inputs, role=""):
-        mean_actions = self.actor(inputs["states"])
-        distribution = SquashedNormal(mean_actions, self.log_std_parameter.clamp(min=self._min_log_std))
+        pre_tanh_mean = self.actor(inputs["states"])
+        distribution = SquashedNormal(pre_tanh_mean, self.log_std_parameter.clamp(min=self._min_log_std))
         sampled_actions = distribution.rsample()
         likelihood_actions = inputs.get("taken_actions", sampled_actions)
         log_prob = distribution.log_prob(likelihood_actions).sum(dim=-1, keepdim=True)
         self._distribution = distribution
-        self._num_samples = mean_actions.shape[0]
-        return sampled_actions, log_prob, {"mean_actions": mean_actions}
+        self._num_samples = pre_tanh_mean.shape[0]
+        return sampled_actions, log_prob, {"mean_actions": distribution.mean}
 
     def get_entropy(self, role=""):
         return self._distribution.entropy()
