@@ -111,8 +111,8 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 - The code is in [crazysim/methods](source/crazysim/crazysim/methods); each file's docstring lists what differs from the
   reference code.
 - Every method keeps the **best agent** of each stage, not the agent at the end of training: skrl's checkpoint with
-  the highest mean training episode return (`checkpoints/best_agent.pt`), checked every 20 iterations
-  (`agent.experiment.checkpoint_interval: 480` timesteps). It is the stage's evaluated `policy.pt` and what the next
+  the highest mean training episode return (`checkpoints/best_agent.pt`), checked every iteration
+  (`scripts/skrl/train.py` sets `agent.experiment.checkpoint_interval` to `agent.rollouts` timesteps, for every method). It is the stage's evaluated `policy.pt` and what the next
   stage builds on (the base of `residual`, the unit of `componet`, the policy the KAE of `kae_moe` is fitted to, the
   fast learner that `fame` distills). Sessions named `*_setpoints_all` predate this: there only `finetune` used the
   best agent and the other methods kept the final one.

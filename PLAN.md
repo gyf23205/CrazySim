@@ -87,7 +87,7 @@ Each method keeps its own history. No method ever starts from another method's r
 random start phase,
 ±0.1 m spawn noise, learning rate 5e-4 with a KL-adaptive schedule (maximum 1e-3), command bounds
 ±4.5 m in XY and 0 to 9.85 m in Z, training episodes end when the drone is more than 1 m from the
-reference. A checkpoint candidate is saved every 20 iterations, and the best one is the candidate
+reference. A checkpoint candidate is saved every iteration (since 2026-11-17; every 20 before), and the best one is the candidate
 with the highest mean training return.
 
 ### Observation normalization per method

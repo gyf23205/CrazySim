@@ -66,9 +66,10 @@ agent:
     directory: "crazyflie_tracking"
     experiment_name: ""
     write_interval: auto
-    # timesteps (20 iterations) between checkpoints; each one is a candidate for the best checkpoint,
-    # which every method uses as the stage's policy and carries to the next task
-    checkpoint_interval: 480
+    # timesteps between checkpoints: every iteration (= rollouts; scripts/skrl/train.py sets it to rollouts).
+    # Each one is a candidate for the best checkpoint, which every method uses as the stage's policy and
+    # carries to the next task
+    checkpoint_interval: 24
 
 # Sequential trainer
 # https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html

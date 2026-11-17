@@ -20,15 +20,15 @@ environment. The methods are `kae_moe`, `finetune` (PPO fine-tuning), `residual`
 
 `scripts/skrl/train.py --warm_start` trains exactly one task and then, instead of finishing the task:
 
-1. loads the best checkpoint of the run (highest mean training return; a candidate every 20 iterations),
+1. loads the best checkpoint of the run (highest mean training return; a candidate every iteration),
 2. writes it as `transfer_bundle.pt`, the file `Drone_Test_TRO` imports,
 3. writes `policy.pt`, the deterministic policy of that checkpoint, for the validation script.
 
 It does not fit a KAE, freeze the Residual base, append the CompoNet unit or run FAME's consolidation.
 Those steps finish a shape and happen in `Drone_Test_TRO` after the real flight (`finalize_stage.py`).
 
-Use a budget that is a multiple of 20 iterations. A shorter run has no checkpoint candidate and hands over
-its final iteration.
+Every iteration writes a checkpoint candidate (`checkpoints/agent_<timestep>.pt`), except the last one, which is
+covered by `final_agent.pt`.
 
 ## Step 0: the Square, in simulation only
 

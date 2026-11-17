@@ -250,6 +250,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         set_control_frequency(env_cfg, args_cli.control_freq)
     if args_cli.max_iterations:
         agent_cfg["trainer"]["timesteps"] = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
+    # every method writes a checkpoint (and checks for a new best) every iteration
+    agent_cfg["agent"]["experiment"]["checkpoint_interval"] = agent_cfg["agent"]["rollouts"]
     agent_cfg["trainer"]["close_environment_at_exit"] = False
     if METHODS[args_cli.method].reuses_policies and agent_cfg["agent"].get("state_preprocessor"):
         # frozen policies of earlier stages take raw observations and keep their own normalizer
