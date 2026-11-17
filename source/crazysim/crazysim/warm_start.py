@@ -22,6 +22,7 @@ is written as a *description*: a nested mapping with a ``kind``, a state diction
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import subprocess
@@ -39,16 +40,19 @@ from .methods.kae_moe import MoEActor
 from .methods.residual import ComposedActor
 
 SHARED_SQUARE_METHODS = ("finetune", "residual", "componet", "kae_moe")
-"""Methods that can start from a Square trained with ``--method scratch``: their own first stage is the same
-plain PPO policy. FAME trains its own Square, whose end distills the meta learner."""
+"""Methods that start from a Square trained with ``--method scratch``: their own first stage is the same
+plain PPO policy. FAME can start from it too (see :data:`SQUARE_FILES`)."""
 SQUARE_FILES = {
-    "finetune": ("checkpoint",),
-    "residual": ("checkpoint",),
-    "componet": ("checkpoint",),
-    "kae_moe": ("kae",),
-    "fame": ("checkpoint", "meta_policy"),
+    "finetune": (("checkpoint",),),
+    "residual": (("checkpoint",),),
+    "componet": (("checkpoint",),),
+    "kae_moe": (("kae",),),
+    "fame": (("checkpoint",), ("checkpoint", "meta_policy")),
 }
-"""Files of the Square stage a warm-up of each method starts from (arguments of :func:`seed_from_square`)."""
+"""Files of the Square stage a warm-up of each method starts from (arguments of :func:`seed_from_square`): the
+sets of files a method accepts. FAME's fast learner is the plain PPO agent, so FAME takes either the
+checkpoint of the shared Square alone, from which its meta learner is distilled as at the end of its own
+first stage, or the checkpoint and ``meta_policy.pt`` of a Square it trained itself."""
 NEXT_STAGE_STRATEGY = {
     "finetune": "continue_actor_and_compatible_algorithm_state",
     "residual": "freeze_completed_current_controller_as_base",
@@ -488,21 +492,27 @@ def seed_from_square(
     kae: str | None = None,
     policy: str | None = None,
     meta_policy: str | None = None,
+    work_dir: str | None = None,
 ) -> dict:
     """Give ``method`` the state after a Square stage, from the files of that stage named in :data:`SQUARE_FILES`.
 
     The methods in :data:`SHARED_SQUARE_METHODS` train the same plain PPO policy in their own first stage, so
     one Square trained with ``--method scratch`` serves all of them: ``checkpoint`` is its agent checkpoint
-    (``checkpoints/best_agent.pt``) and ``kae`` the KAE of ``scripts/skrl/fit_kae.py`` (``kae/kae.pt``). FAME
-    takes ``checkpoints/best_agent.pt`` and ``meta_policy.pt`` of its own Square stage. ``policy`` is not used
-    by any method. Returns the files that were read.
+    (``checkpoints/best_agent.pt``) and ``kae`` the KAE of ``scripts/skrl/fit_kae.py`` (``kae/kae.pt``).
+
+    FAME takes the same ``checkpoint`` alone: its fast learner is that PPO agent, and the meta learner is
+    distilled from it here, as ``Fame.end_stage`` does after FAME's own first stage (the result is saved as
+    ``meta_policy.pt`` in ``work_dir``). With ``checkpoint`` and ``meta_policy`` of a Square that FAME trained
+    itself, that meta learner is used instead. ``policy`` is not used by any method. Returns the files that
+    were read.
     """
     given = {"checkpoint": checkpoint, "kae": kae, "policy": policy, "meta_policy": meta_policy}
     given = {name: os.path.abspath(path) for name, path in given.items() if path}
-    needed = SQUARE_FILES[method.name]
-    if sorted(given) != sorted(needed):
+    accepted = SQUARE_FILES[method.name]
+    if sorted(given) not in [sorted(files) for files in accepted]:
+        options = " or ".join(", ".join("--square_" + name for name in files) for files in accepted)
         raise ValueError(
-            f"Method '{method.name}' starts from the Square with {', '.join('--square_' + name for name in needed)}; "
+            f"Method '{method.name}' starts from the Square with {options}; "
             f"got {', '.join('--square_' + name for name in given) or 'none of them'}."
         )
     for name, path in given.items():
@@ -514,17 +524,31 @@ def seed_from_square(
         origin = "simulation-square:" + hashlib.sha256(Path(given["kae"]).read_bytes()).hexdigest()
         method.experts = [kae_expert_from_node(kae_node(method.load_module(given["kae"])), origin, method.device)]
     elif method.name == "fame":
-        # as Fame.resume after one stage: the meta learner, and its buffer refilled with the Square's best fast learner
-        meta = method.load_module(given["meta_policy"])
-        if not isinstance(meta, MetaPolicy):
-            raise ValueError(
-                "--square_meta_policy was made with FAME's earlier PPO variant; train FAME's Square again."
-            )
-        method.meta = meta.train()
-        agent = method.build_ppo_agent(method.new_mlp_actor(), os.path.dirname(given["meta_policy"]))
+        agent = method.build_ppo_agent(method.new_mlp_actor(), work_dir or os.path.dirname(given["checkpoint"]))
         agent.load(given["checkpoint"])
         method.meta_buffer.clear()
-        method.meta_buffer.add(method._visited_states(agent, "square"))
+        if "meta_policy" in given:
+            # as Fame.resume after one stage: the meta learner, and its buffer refilled with the Square's best
+            # fast learner
+            meta = method.load_module(given["meta_policy"])
+            if not isinstance(meta, MetaPolicy):
+                raise ValueError(
+                    "--square_meta_policy was made with FAME's earlier PPO variant; train FAME's Square again."
+                )
+            method.meta = meta.train()
+            method.meta_buffer.add(method._visited_states(agent, "square"))
+        else:
+            # as Fame.end_stage after FAME's own first stage, with the Square's PPO agent as the fast learner
+            method.meta = None
+            states = method._visited_states(agent, "square")
+            print(f"[FAME] Collected {states.shape[0]} states of square with the Square's PPO agent")
+            method._train_meta(states, agent)
+            method.meta_buffer.add(states)
+            if work_dir is not None:
+                os.makedirs(work_dir, exist_ok=True)
+                path = os.path.join(work_dir, "meta_policy.pt")
+                torch.save(copy.deepcopy(method.meta).eval(), path)
+                print(f"[FAME] Distilled the meta learner from the Square's PPO agent: {path}")
     else:
         loaded = torch.load(given["checkpoint"], map_location="cpu", weights_only=False)
         controller = freeze(controller_from_node(ppo_controller_node(loaded), method.device))

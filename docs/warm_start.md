@@ -32,8 +32,10 @@ its final iteration.
 
 ## Step 0: the Square, in simulation only
 
-One Square trained with scratch PPO serves `kae_moe`, `finetune`, `residual` and `componet`. FAME trains
-its own Square. This plan uses one lap per episode, so every command carries `env.trajectory_laps=1`.
+One Square trained with scratch PPO serves all five methods. FAME's fast learner is that PPO agent, so FAME
+starts from the same checkpoint and distills its meta learner from it at the start of its Circle warm-up,
+as it would at the end of a Square it trained itself. This plan uses one lap per episode, so every command
+carries `env.trajectory_laps=1`.
 
 ```bash
 # shared Square, its KAE and a check
@@ -45,12 +47,11 @@ python -u scripts/skrl/validate_waypoint.py --headless --stage_dir $SQUARE/0_squ
     --output validation.json env.trajectory_laps=1
 # the Square KAE as a file of Drone_Test_TRO: its finalizer asks for it after KAE-MoE's first real stage
 python scripts/skrl/export_waypoint_artifacts.py --stage_dir $SQUARE/0_square --drone_test_dir <Drone_Test_TRO>
-
-# FAME's own Square
-python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks square --method fame \
-    --headless --no_eval --max_iterations 500 env.trajectory_laps=1
-FAME_SQUARE=logs/skrl/crazyflie_tracking_waypoint/<fame session>
 ```
+
+FAME can instead train its own Square: the first command with `--method fame`, which also writes
+`meta_policy.pt`. With the same seed and settings it is the same PPO training as the shared Square, run a
+second time.
 
 ## Step 1: warm-up of the first new shape
 
@@ -61,7 +62,8 @@ The `--square_...` options name the exact files of the Square stage a method sta
 | --- | --- | --- |
 | `finetune`, `residual`, `componet` | `--square_checkpoint` | `checkpoints/best_agent.pt` of the shared Square |
 | `kae_moe` | `--square_kae` | `kae/kae.pt` of the shared Square, written by `fit_kae.py` |
-| `fame` | `--square_checkpoint`, `--square_meta_policy` | `checkpoints/best_agent.pt` and `meta_policy.pt` of FAME's own Square |
+| `fame` | `--square_checkpoint` | `checkpoints/best_agent.pt` of the shared Square; the meta learner distilled from it is saved as `<session>/square/meta_policy.pt` |
+| `fame`, own Square | `--square_checkpoint`, `--square_meta_policy` | `checkpoints/best_agent.pt` and `meta_policy.pt` of a Square that FAME trained |
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method kae_moe \
@@ -73,9 +75,11 @@ python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --task
     --square_checkpoint $SQUARE/0_square/checkpoints/best_agent.pt
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --tasks circle --method fame \
     --headless --no_eval --warm_start --max_iterations <budget> env.trajectory_laps=1 \
-    --square_checkpoint $FAME_SQUARE/0_square/checkpoints/best_agent.pt \
-    --square_meta_policy $FAME_SQUARE/0_square/meta_policy.pt
+    --square_checkpoint $SQUARE/0_square/checkpoints/best_agent.pt
 ```
+
+FAME's command first rolls the Square policy out on the Square to collect `size_fast2meta` states and runs
+the distillation (`epoch_meta` epochs), then trains the Circle. Nothing is written to the Square's session.
 
 A method refuses the options of another method and a path that is not a file. The files that were read are
 recorded as `square` in `session.json` and as `simulation_parent` in the bundle. The control rate is not

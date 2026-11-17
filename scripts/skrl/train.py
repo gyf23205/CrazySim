@@ -87,8 +87,9 @@ parser.add_argument(
     "--square_checkpoint",
     type=str,
     default=None,
-    help="With --warm_start of finetune, residual or componet: checkpoints/best_agent.pt of the Square trained with "
-    "--method scratch. With --warm_start of fame: checkpoints/best_agent.pt of FAME's own Square stage.",
+    help="With --warm_start of finetune, residual, componet or fame: checkpoints/best_agent.pt of the Square trained "
+    "with --method scratch. FAME distills its meta learner from it; with --square_meta_policy it is the "
+    "checkpoint of FAME's own Square stage instead.",
 )
 parser.add_argument(
     "--square_kae",
@@ -100,7 +101,8 @@ parser.add_argument(
     "--square_meta_policy",
     type=str,
     default=None,
-    help="With --warm_start of fame: meta_policy.pt of FAME's own Square stage.",
+    help="With --warm_start of fame, optional: meta_policy.pt of a Square stage that FAME trained itself, with "
+    "--square_checkpoint of that stage.",
 )
 parser.add_argument(
     "--parent_bundle",
@@ -328,7 +330,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             session["transfer"] = results
     first_index = len(session["stages"])
     if square_files:
-        session["square"] = seed_from_square(method, **square_files)
+        session["square"] = seed_from_square(method, **square_files, work_dir=os.path.join(session_dir, "square"))
         print(f"[INFO] Starting from the Square: {session['square']}")
         first_index = 1  # the Square is stage 0: FAME treats stage 0 as its first task
     if parent_bundle:

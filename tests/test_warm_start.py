@@ -155,9 +155,11 @@ def finished_stage(method, env, tmp_path, name, task="square") -> dict:
 
 
 def seed_square(method, stage) -> dict:
-    """Start ``method`` from the files of a finished Square stage, as the ``--square_...`` options do."""
+    """Start ``method`` from the files of a finished Square stage, as the ``--square_...`` options do.
+
+    FAME: from its own Square (with ``meta_policy.pt``) or, without that file, from the shared Square."""
     stage_dir = Path(stage["policy"]).parent
-    if method.name == "fame":
+    if method.name == "fame" and (stage_dir / "meta_policy.pt").is_file():
         files = {"checkpoint": stage["selected_checkpoint"], "meta_policy": stage_dir / "meta_policy.pt"}
     elif method.name == "kae_moe":
         files = {"kae": stage_dir / "kae" / "kae.pt"}
@@ -383,9 +385,11 @@ def test_bundle_checksum_and_parent_checks(real, square_stage, tmp_path):
     assert tb.digest(unsealed) == real._digest(unsealed)
     with pytest.raises(ValueError, match="finished real stage"):
         ws.check_parent_bundle(bundle, "finetune", "triangle")  # a warm-up is not a parent
-    with pytest.raises(ValueError, match="--square_checkpoint, --square_meta_policy"):  # FAME has its own Square
-        fame = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
-        ws.seed_from_square(fame, checkpoint=square_stage["selected_checkpoint"])
+    fame = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+    with pytest.raises(ValueError, match="--square_checkpoint or --square_checkpoint, --square_meta_policy"):
+        ws.seed_from_square(fame, meta_policy=square_stage["policy"])  # a meta learner needs its Square's checkpoint
+    with pytest.raises(ValueError, match="--square_checkpoint; got --square_kae"):
+        ws.seed_from_square(method, kae=square_stage["policy"])
     with pytest.raises(FileNotFoundError, match="--square_checkpoint"):
         ws.seed_from_square(method, checkpoint=str(tmp_path / "missing.pt"))
     bundle["manifest"]["shape"] = "triangle"
@@ -521,6 +525,46 @@ def finalized_fame_parent(bundle, next_shape, path):
         "consolidated_fame_state": {key: value for key, value in memory.items() if key != "fast2meta"},
     }  # fmt: skip
     return tb.read_bundle(tb.write_bundle(parent, path))
+
+
+def test_fame_starts_from_the_shared_square_as_after_its_own_first_stage(real, square_stage, tmp_path):
+    """From the checkpoint of the scratch Square alone, FAME gets the fast learner of that Square and the meta
+    learner that ``Fame.end_stage`` would distill from it, and its Circle warm-up continues on the real side."""
+    shared = torch.load(square_stage["policy"], weights_only=False)  # policy.pt of the scratch Square
+    states = torch.randn(8, 56)
+
+    # what FAME does at the end of a first stage, with the Square's agent as its fast learner
+    torch.manual_seed(47)
+    reference = METHODS["fame"](TensorEnv(), agent_cfg("fame"), str(tmp_path))
+    fast = reference.build_ppo_agent(reference.new_mlp_actor(), str(tmp_path / "reference"))
+    fast.load(square_stage["selected_checkpoint"])
+    square_states = reference._visited_states(fast, "square")
+    reference._train_meta(square_states, fast)
+    with torch.no_grad():
+        torch.testing.assert_close(reference.ppo_policy(fast)(states), shared(states))  # the same Square policy
+
+    torch.manual_seed(47)
+    env = TensorEnv()
+    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+    files = ws.seed_from_square(
+        method, checkpoint=square_stage["selected_checkpoint"], work_dir=str(tmp_path / "session" / "square")
+    )
+    assert files == {"checkpoint": square_stage["selected_checkpoint"]}
+    assert method.meta.squash and method.meta.training
+    with torch.no_grad():
+        torch.testing.assert_close(method.meta(states), reference.meta(states))
+    torch.testing.assert_close(method.meta.log_std, reference.meta.log_std)
+    torch.testing.assert_close(method.meta_buffer.all(), square_states)
+    saved = torch.load(tmp_path / "session" / "square" / "meta_policy.pt", weights_only=False)
+    with torch.no_grad():
+        torch.testing.assert_close(saved(states), method.meta(states))
+    assert not (Path(square_stage["policy"]).parent / "meta_policy.pt").exists()  # the shared Square is not written to
+
+    agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
+    assert agent.detection["choice"] in ("meta", "fresh")
+    bundle, target = check_real_import(real, "fame", agent, policy, info, "circle")
+    assert bundle["manifest"]["simulation_parent"] == {"shape": "square", "files": files}
+    assert target.memory_meta.size == 32 and target.memory_fast2meta.size == 32
 
 
 def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):

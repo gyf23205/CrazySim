@@ -280,6 +280,13 @@ writes FAME's bundle as the PPO fine-tuning bundle plus FAME's memory, and start
 consolidates and finalizes this bundle (`examples/setpoint/fame_ppo.py` there); checked without hardware and
 with a dry run, not on the drone.
 
+**Update, November 16, 2026: FAME starts from the shared Square.** At Woojun's request, FAME no longer needs a
+Square of its own: `--square_checkpoint` of the shared Square alone starts its Circle warm-up, and the meta
+learner is distilled from that policy as `Fame.end_stage` does after FAME's first stage. All five methods
+then start from the identical Square policy. This replaces "FAME trains its own Square" in the experiment
+sequence and in the decisions table above; a Square trained by FAME is still accepted
+(`--square_checkpoint` with `--square_meta_policy`). Yifan's `fame.py` is unchanged.
+
 **Update, November 16, 2026: merge of master 4d17470.** Every method setting of the waypoint task is now
 Yifan's (`skrl_ppo_waypoint_cfg.yaml`): `[64, 64]` for the residual network, CompoNet's internal policy and
 KAE-MoE's MLP path, KAE latent size 16, router `[128]`, KAE batch size 2048. Every policy network returns
