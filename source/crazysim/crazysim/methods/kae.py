@@ -183,8 +183,16 @@ def train_kae(
             optimizer.step()
             sums += torch.stack([loss, loss_kae, action, recon, state, latent]).detach()
 
-            _, latent_in, _ = kae(inputs)
-            _, latent_out, _ = kae(outputs)
+            # fresh samples for every EDMD solve, independent of the encoder updates so far
+            with torch.no_grad():
+                edmd_in = distribution.sample((sample_count,))
+                edmd_out = policy(edmd_in)
+                edmd_in, edmd_out = pad(edmd_in, padded_dim), pad(edmd_out, padded_dim)
+            _, latent_in, _ = kae(edmd_in)
+            _, latent_out, _ = kae(edmd_out)
+
+            # _, latent_in, _ = kae(inputs)
+            # _, latent_out, _ = kae(outputs)
             kae.compute_koopman_operator(latent_in, latent_out)
             if not torch.isfinite(kae.K).all():
                 raise FloatingPointError(f"Koopman operator contains NaN or Inf at epoch {epoch + 1}.")
@@ -198,7 +206,7 @@ def train_kae(
                 flush=True,
             )
 
-    kae.K = kae.K.detach()
+    # kae.K = kae.K.detach()
     kae.eval()
     for param in kae.parameters():
         param.requires_grad = False
