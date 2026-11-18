@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
 import os
 import subprocess
 import torch
@@ -936,7 +937,30 @@ def environment_contract(env_cfg, task: str) -> dict:
         "reference_geometry_version": "fixed_center_five_shapes_v1",
         "shape_rotation_y_degrees": 0.0,
     }
+    if task == "star":
+        contract.update(star_contract(active.vertices))
     return contract
+
+
+def star_contract(vertices) -> dict:
+    """Radii and tip count of the star task, which ``cf_star_setpoint_ppo_real.py`` of ``Drone_Test_TRO`` records.
+
+    The real side rebuilds the star from these three numbers (tips and notches alternating, the first a tip on
+    +x, counter-clockwise), so a star laid out any other way is rejected rather than recorded.
+    """
+    tips = len(vertices) // 2
+    outer = round(math.hypot(*vertices[0]), 6)
+    inner = round(math.hypot(*vertices[1]), 6)
+    expected = [
+        ((outer if i % 2 == 0 else inner) * math.cos(math.pi * i / tips),
+         (outer if i % 2 == 0 else inner) * math.sin(math.pi * i / tips))
+        for i in range(2 * tips)
+    ]  # fmt: skip
+    if len(vertices) % 2 or tips != 5 or not 0.0 < inner < outer or any(
+        math.dist(vertex, rebuilt) > 1e-6 for vertex, rebuilt in zip(vertices, expected)
+    ):
+        raise ValueError("Drone_Test_TRO flies a 5-point star starting at the tip on +x, counter-clockwise.")
+    return {"star_outer_radius": outer, "star_inner_radius": inner, "star_tips": tips}
 
 
 def observation_contract(environment: Mapping) -> str:

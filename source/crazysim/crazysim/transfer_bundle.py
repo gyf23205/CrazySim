@@ -23,7 +23,7 @@ from pathlib import Path
 VERSION = 1
 ARTIFACT_TYPE = "simulation_real_continuation"
 BUNDLE_FILE = "transfer_bundle.pt"
-SHAPES = ("square", "circle", "triangle", "figure8", "skewed_figure8")
+SHAPES = ("square", "circle", "triangle", "figure8", "skewed_figure8", "star")
 EQUATIONS = {
     "kae_moe": "crazysim_kae_moe_v3",
     "residual": "crazysim_residual_v3",

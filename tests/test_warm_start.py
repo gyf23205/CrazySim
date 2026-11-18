@@ -108,6 +108,14 @@ def agent_cfg(method: str) -> dict:
     return cfg
 
 
+# waypoint_env_cfg._star_vertices(0.75, 0.3) and its perimeter
+STAR = tuple(
+    ((0.75 if i % 2 == 0 else 0.3) * math.cos(math.pi * i / 5), (0.75 if i % 2 == 0 else 0.3) * math.sin(math.pi * i / 5))
+    for i in range(10)
+)  # fmt: skip
+STAR_LENGTH = sum(math.dist(STAR[i], STAR[(i + 1) % 10]) for i in range(10))
+
+
 def env_cfg(laps=1, xy=4.0, z=(0.25, 2.0)):
     """Values of ``WaypointTrackingEnvCfg`` that enter the bundle; laps and command bounds as given."""
     height, speed, tri = 0.75, 0.25, 0.5 * math.sqrt(3.0)
@@ -126,6 +134,7 @@ def env_cfg(laps=1, xy=4.0, z=(0.25, 2.0)):
             vertices=((-0.5, -tri / 3.0), (0.5, -tri / 3.0), (0.0, 2.0 * tri / 3.0)), center=center, period=3.0 / speed
         ),
         "figure8": SimpleNamespace(size=(1.0, 0.5), center=center, period=figure8_length / speed),
+        "star": SimpleNamespace(vertices=STAR, center=center, period=STAR_LENGTH / speed),
     }
     return SimpleNamespace(
         tasks=tasks, sim=SimpleNamespace(dt=1.0 / 500.0), decimation=10, trajectory_laps=laps,
@@ -311,7 +320,7 @@ def finalize_real_stage(real, source, method_name, shape, next_shape, tmp_path):
 
 
 @pytest.mark.parametrize("method_name", ALL)
-@pytest.mark.parametrize("shapes", [("circle", "triangle"), ("triangle", "figure8")])
+@pytest.mark.parametrize("shapes", [("circle", "triangle"), ("triangle", "figure8"), ("skewed_figure8", "star")])
 def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, tmp_path, method_name, shapes):
     torch.manual_seed(17)
     shape, next_shape = shapes
@@ -354,7 +363,7 @@ def test_warm_up_from_a_finalized_real_parent_continues_on_the_real_side(real, t
         assert bundle["architecture"]["policy"]["chain_depth"] == source.policy.residual_core.chain_depth + 1
 
 
-@pytest.mark.parametrize("task", ["square", "circle", "triangle", "figure8"])
+@pytest.mark.parametrize("task", ["square", "circle", "triangle", "figure8", "star"])
 def test_task_settings_match_what_the_real_side_compares(real, task):
     config = real.runtime.SetpointRuntimeConfig(pattern=task)
     expected = real.environment_contract(config, real.runtime.setpoint_spec_for_shape(task))
@@ -762,3 +771,13 @@ def test_fame_hands_over_the_best_checkpoint_within_the_budget(tmp_path):
     torch.testing.assert_close(modules["policy"]["net_container.0.weight"], best["policy"]["actor.0.weight"])
     torch.testing.assert_close(modules["policy"]["log_std_parameter"], best["policy"]["log_std_parameter"])
     assert bundle["manifest"]["learning_rate_at_selection"] == best["optimizer"]["param_groups"][0]["lr"]
+
+
+def test_only_the_standard_star_is_recorded():
+    assert ws.star_contract(STAR) == {"star_outer_radius": 0.75, "star_inner_radius": 0.3, "star_tips": 5}
+    clockwise = (STAR[0],) + tuple(reversed(STAR[1:]))
+    from_a_notch = STAR[1:] + STAR[:1]
+    six_tips = tuple((0.75 * math.cos(math.pi * i / 6), 0.75 * math.sin(math.pi * i / 6)) for i in range(12))
+    for vertices in (clockwise, from_a_notch, six_tips):
+        with pytest.raises(ValueError, match="5-point star"):
+            ws.star_contract(vertices)
