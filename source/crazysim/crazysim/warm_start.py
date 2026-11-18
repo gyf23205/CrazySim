@@ -560,8 +560,12 @@ def seed_from_square(
     return given
 
 
-def check_parent_bundle(bundle: Mapping, method_name: str, task: str):
-    """Raise unless ``bundle`` is the finalized real result of ``method_name`` that the shape ``task`` starts from."""
+def check_parent_bundle(bundle: Mapping, method_name: str, task: str, allow_shape_skip: bool = False):
+    """Raise unless ``bundle`` is the finalized real result of ``method_name`` that the shape ``task`` starts from.
+
+    Finalization names the next shape in the order of ``tb.SHAPES``. With ``allow_shape_skip``, ``task`` may be any
+    later shape instead (for example Figure-8 to the star, skipping Skewed Figure-8); the skipped shapes are printed.
+    """
     manifest = bundle["manifest"]
     if manifest["method"] != method_name:
         raise ValueError(f"The parent bundle belongs to method '{manifest['method']}', not '{method_name}'.")
@@ -573,7 +577,14 @@ def check_parent_bundle(bundle: Mapping, method_name: str, task: str):
     if next_stage.get("strategy") != NEXT_STAGE_STRATEGY[method_name]:
         raise ValueError("The parent bundle was finalized for a different method.")
     if next_stage.get("shape") not in (None, task):
-        raise ValueError(f"The parent bundle was finalized for shape '{next_stage.get('shape')}', not '{task}'.")
+        parent_index, task_index = tb.SHAPES.index(manifest["shape"]), tb.SHAPES.index(task)
+        if not allow_shape_skip or task_index <= parent_index:
+            raise ValueError(
+                f"The parent bundle was finalized for shape '{next_stage.get('shape')}', not '{task}'"
+                + ("." if task_index <= parent_index else "; pass --allow_shape_skip to skip to a later shape.")
+            )
+        skipped = ", ".join(tb.SHAPES[parent_index + 1 : task_index])
+        print(f"[WARNING] Skipping {skipped}: the {manifest['shape']} parent goes straight to {task}.")
     if manifest["phase"] == "kinematic":
         print("[WARNING] The parent bundle comes from a dry run, not from a real flight.")
 
@@ -612,9 +623,9 @@ def finetune_checkpoint(bundle: Mapping) -> dict:
     return checkpoint
 
 
-def seed_from_bundle(method: Method, bundle: Mapping, task: str, work_dir: str):
+def seed_from_bundle(method: Method, bundle: Mapping, task: str, work_dir: str, allow_shape_skip: bool = False):
     """Give ``method`` the state after the finished real stage in ``bundle``, to train ``task`` next."""
-    check_parent_bundle(bundle, method.name, task)
+    check_parent_bundle(bundle, method.name, task, allow_shape_skip)
     next_stage = bundle["manifest"]["next_stage"]
     if method.name == "finetune":
         os.makedirs(work_dir, exist_ok=True)

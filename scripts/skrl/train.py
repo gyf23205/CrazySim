@@ -110,6 +110,13 @@ parser.add_argument(
     default=None,
     help="With --warm_start: finalized transfer_bundle.pt of the previous shape's real stage (same method).",
 )
+parser.add_argument(
+    "--allow_shape_skip",
+    action="store_true",
+    default=False,
+    help="With --parent_bundle: train a shape later than the one the parent was finalized for (e.g. figure8 to "
+    "star, skipping skewed_figure8).",
+)
 parser.add_argument("--run_name", type=str, default=None, help="Suffix of the session directory name.")
 parser.add_argument("--no_eval", action="store_true", default=False, help="Skip the evaluation after each task.")
 
@@ -195,7 +202,9 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         if not args_cli.warm_start or args_cli.resume or args_cli.checkpoint:
             raise ValueError("--parent_bundle needs --warm_start and cannot be combined with --resume or --checkpoint.")
         parent_bundle = read_bundle(args_cli.parent_bundle)
-        check_parent_bundle(parent_bundle, args_cli.method, tasks[0])
+        check_parent_bundle(parent_bundle, args_cli.method, tasks[0], args_cli.allow_shape_skip)
+    elif args_cli.allow_shape_skip:
+        raise ValueError("--allow_shape_skip needs --parent_bundle.")
     if args_cli.resume:
         with open(os.path.join(args_cli.resume, "session.json")) as f:
             previous = json.load(f)
@@ -337,7 +346,9 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
         first_index = 1  # the Square is stage 0: FAME treats stage 0 as its first task
     if parent_bundle:
         print(f"[INFO] Starting from the {parent_bundle['manifest']['shape']} real result {args_cli.parent_bundle}")
-        seed_from_bundle(method, parent_bundle, tasks[0], os.path.join(session_dir, "parent"))
+        seed_from_bundle(
+            method, parent_bundle, tasks[0], os.path.join(session_dir, "parent"), args_cli.allow_shape_skip
+        )
         # the stage index counts the earlier shapes: FAME treats stage 0 as its first task
         first_index = SHAPES.index(parent_bundle["manifest"]["shape"]) + 1
     for index, task in enumerate(tasks, start=first_index):

@@ -781,3 +781,25 @@ def test_only_the_standard_star_is_recorded():
     for vertices in (clockwise, from_a_notch, six_tips):
         with pytest.raises(ValueError, match="5-point star"):
             ws.star_contract(vertices)
+
+
+@pytest.mark.parametrize("method_name", ["kae_moe", "fame"])
+def test_figure8_parent_skips_to_the_star_only_when_asked(real, tmp_path, method_name, capsys):
+    torch.manual_seed(23)
+    parent, source = real_parent(real, method_name, "figure8", "skewed_figure8", tmp_path)
+    env = TensorEnv()
+    method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
+    with pytest.raises(ValueError, match="--allow_shape_skip"):
+        ws.check_parent_bundle(parent, method_name, "star")
+    with pytest.raises(ValueError, match="finalized for shape"):  # never backwards, even when asked
+        ws.check_parent_bundle(parent, method_name, "circle", allow_shape_skip=True)
+    ws.seed_from_bundle(method, parent, "star", str(tmp_path / "parent"), allow_shape_skip=True)
+    assert "Skipping skewed_figure8: the figure8 parent goes straight to star." in capsys.readouterr().out
+    if method_name == "kae_moe":
+        assert len(method.experts) == len(source.policy.moe_core.kae.blocks) + 1
+
+    agent, policy, info = warm_up(method, env, tmp_path, "star", tb.SHAPES.index("figure8") + 1, parent=parent)
+    bundle, _ = check_real_import(real, method_name, agent, policy, info, "star")
+    manifest = bundle["manifest"]
+    assert manifest["shape"] == "star" and manifest["parent"]["shape"] == "figure8"
+    assert (manifest["environment"]["star_outer_radius"], manifest["environment"]["star_tips"]) == (0.75, 5)
