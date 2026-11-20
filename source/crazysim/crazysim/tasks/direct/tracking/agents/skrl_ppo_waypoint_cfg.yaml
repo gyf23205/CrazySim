@@ -42,7 +42,7 @@ agent:
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.016
     max_lr: 1.0e-03
-  state_preprocessor: RunningStandardScaler
+  state_preprocessor: null  # no observation normalization for any method (fame's meta learner included)
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
   value_preprocessor_kwargs: null
@@ -85,8 +85,8 @@ kae:
   seed: 777
 
 # Settings of the transfer methods (scripts/skrl/train.py --method <name>); see skrl_ppo_cfg.yaml.
-# residual, componet and kae_moe run frozen policies of earlier tasks on raw observations, so they need the
-# observation normalization off: append the Hydra override agent.agent.state_preprocessor=null to train.py.
+# Observation normalization is off for every method (agent.state_preprocessor: null above). residual, componet and
+# kae_moe require it off: they run frozen policies of earlier tasks on raw observations.
 # Their network sizes follow the policy above ([64, 64]); kae_moe's KAE settings follow kae: above.
 methods:
   residual:

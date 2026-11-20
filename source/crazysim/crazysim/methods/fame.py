@@ -13,9 +13,10 @@ Ported from ``less_leg_walking_1`` (``baselines/FAME/``, ``scripts/skrl/train_FA
 - Task switch: the deterministic actions of the new fast learner and of the meta learner are both
   evaluated on the new task; the better one initializes the fast learner's policy (mean network,
   log standard deviation and observation normalization; the value network stays new).
-- Observation normalization (``agent.state_preprocessor: RunningStandardScaler``, as in the waypoint
-  configuration): the meta learner has its own normalization, set before every distillation to the
-  mean and variance of all states it is distilled on (this task's and the stored earlier ones).
+- Observation normalization is off by default (``agent.state_preprocessor: null``); the meta learner then has
+  none either. If it is turned on (``agent.state_preprocessor: RunningStandardScaler``), the meta learner
+  has its own normalization, set before every distillation to the mean and variance of all states it is
+  distilled on (this task's and the stored earlier ones).
 - Squashed Gaussian policy (waypoint configuration): the distillation matches the pre-tanh Gaussians, as
   in ``cf_fame_real.py`` of ``Drone_Test_TRO``. Every learner squashes with the same ``tanh``, so this
   matches the action distributions.
