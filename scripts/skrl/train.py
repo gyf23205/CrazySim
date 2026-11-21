@@ -152,7 +152,8 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
                 f"--resume session used env.action_mode={previous_action_mode}, not {env_cfg.action_mode}."
             )
     # all tasks of the session, earlier ones (when resuming) included
-    all_tasks = (previous["tasks"] if previous else []) + tasks
+    # finished stages only: "tasks" of an interrupted session also lists the tasks it did not reach
+    all_tasks = ([stage["task"] for stage in previous["stages"]] if previous else []) + tasks
     unknown = [task for task in all_tasks if task not in env_cfg.tasks]
     if unknown:
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")

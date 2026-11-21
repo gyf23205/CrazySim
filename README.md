@@ -201,7 +201,7 @@ waypoint control works with every method. Observation normalization is off for e
 policies of earlier tasks on raw observations. As in `Drone_Test_TRO`, every method's network
 returns the pre-tanh mean `u` of the tanh-squashed Gaussian policy and the action is `tanh(u)`, so no clamp zeroes
 the policy gradient: `residual` adds its residual to `atanh` of the base action, `componet` averages `atanh` of the
-earlier units' actions, and the `kae_moe` blend is `u` itself. Example:
+earlier units' actions, and the `kae_moe` blend is `u` itself. Five-task results: [docs/continual_learning_results_waypoint.md](docs/continual_learning_results_waypoint.md). Example:
 `python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method kae_moe --headless --tasks circle rectangle`.
 
 ```bash
