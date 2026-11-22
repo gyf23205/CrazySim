@@ -103,6 +103,12 @@ Yifan's method code refuses to run Residual, CompoNet and KAE-MoE with it on
 ([base.py:138](source/crazysim/crazysim/methods/base.py:138)). `Drone_Test_TRO` already uses the
 same arrangement, so nothing changes there.
 
+**Update, November 21, 2026 (master de15ad5, b2499b7).** Observation normalization is now off for every
+method, the shared Square, PPO fine-tuning and FAME included; the table above describes the runs made
+before that. A Square or real result with a normalizer cannot start PPO fine-tuning or FAME under the
+current configuration; see [docs/warm_start.md](docs/warm_start.md). Master also adds the method
+`finetune_reset` (carried networks, new optimizer and action noise), which is not part of the warm-up.
+
 ### What "skip the rest of `end_stage`" means
 
 After a warm-up, `train.py` loads the best checkpoint and exports it. It does not fit a KAE to the

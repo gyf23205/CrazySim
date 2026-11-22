@@ -16,6 +16,17 @@ environment. The methods are `kae_moe`, `finetune` (PPO fine-tuning), `residual`
 > recent. Bundles, squares, KAEs and real results from before it use the earlier policies and are
 > refused or should be made again. Checked without hardware and with a dry run, not on the drone.
 
+> **State after the merge of master b2499b7 (November 21, 2026).** Master de15ad5 turns observation
+> normalization off for every method (`agent.state_preprocessor: null` in the waypoint configuration), so
+> PPO fine-tuning and FAME now train on raw observations like the other three methods, and their bundles
+> carry no observation normalizer. `Drone_Test_TRO` follows the bundle and continues them without one.
+> A Square, bundle or real result of PPO fine-tuning or FAME from before this change was trained with a
+> normalizer: train the Square again, or continue the earlier chain by adding the Hydra override
+> `agent.agent.state_preprocessor=RunningStandardScaler` to every warm-up command of these two methods.
+> A warm-up refuses a parent whose setting differs from the configuration. The same commit adds the
+> method `finetune_reset`; it has no bundle description and `--warm_start` refuses it. Checked without
+> hardware, not in Isaac Sim or on the drone.
+
 ## What a warm-up does
 
 `scripts/skrl/train.py --warm_start` trains exactly one task and then, instead of finishing the task:
@@ -32,7 +43,9 @@ covered by `final_agent.pt`.
 
 ## Step 0: the Square, in simulation only
 
-One Square trained with scratch PPO serves all five methods. FAME's fast learner is that PPO agent, so FAME
+One Square trained with scratch PPO serves all five methods. Train it with the current configuration (no
+observation normalization): PPO fine-tuning and FAME continue its policy and refuse a Square whose
+normalization differs from theirs. FAME's fast learner is that PPO agent, so FAME
 starts from the same checkpoint and distills its meta learner from it at the start of its Circle warm-up,
 as it would at the end of a Square it trained itself. This plan uses one lap per episode, so every command
 carries `env.trajectory_laps=1`.
@@ -156,11 +169,11 @@ Then repeat steps 2 and 3 for each shape.
 
 | | Simulation to real | Real to simulation (next shape) |
 | --- | --- | --- |
-| PPO fine-tuning | Policy, critic, optimizer, both normalizers | The same |
+| PPO fine-tuning | Policy, critic, optimizer, value normalizer | The same |
 | Residual | Frozen base, residual network, noise, critic, optimizer | The finished controller becomes the frozen base |
 | CompoNet | Frozen earlier controllers, attention heads, internal policy, noise, critic, optimizer | The finished controller is appended to the earlier ones |
 | KAE-MoE | KAE bank, router, mode weights, gate, MLP path, noise, critic, optimizer | The bank plus the KAE fitted to the real-adapted policy |
-| FAME | As PPO fine-tuning (the fast learner), plus the meta learner with its own normalizer and both state buffers | Consolidated meta learner and its buffer of earlier states |
+| FAME | As PPO fine-tuning (the fast learner), plus the meta learner and both state buffers | Consolidated meta learner and its buffer of earlier states |
 
 A new shape in simulation uses each method's own behaviour: Residual, CompoNet and KAE-MoE start with a
 new critic and new action noise, PPO fine-tuning continues everything, and FAME tests a new policy
@@ -181,10 +194,16 @@ attention's average of `atanh` of the earlier actions plus the internal policy (
 the KAE and MLP pathways (KAE-MoE). A frozen earlier policy is passed on as its action. A bundle written
 before 4d17470 records `bounded_center_inverse_tanh_gaussian_v1` and is refused.
 
-**Observation normalization.** PPO fine-tuning normalizes observations and keeps updating the statistics.
-Residual, CompoNet and KAE-MoE do not: their frozen earlier policies take raw observations and keep their
-own normalizer, so `train.py` turns it off for these methods. FAME normalizes like PPO fine-tuning; its
-meta learner has a normalizer of its own, which a fast learner that starts from the meta learner takes over.
+**Observation normalization.** Off for every method since master de15ad5: all policies, FAME's meta
+learner included, take raw observations, and no bundle carries an observation normalizer. The value
+network's targets are still normalized, and PPO fine-tuning and FAME hand that normalizer over. The
+configuration can turn observation normalization on for PPO fine-tuning and FAME
+(`agent.agent.state_preprocessor=RunningStandardScaler`); the bundle then carries the normalizer, the
+real stage keeps updating it, and FAME's meta learner has one of its own, which a fast learner that starts
+from the meta learner takes over. Residual, CompoNet and KAE-MoE never normalize (`train.py` turns it
+off for them): a frozen earlier policy that was trained with a normalizer keeps it. A parent of PPO
+fine-tuning or FAME (`--square_checkpoint`, `--square_meta_policy`, `--parent_bundle`) must have the
+setting of the configuration, or the warm-up stops before training.
 
 **Task settings.** The bundle records the task settings of the simulation run (shape sizes, speed, laps,
 command bounds, observation scales). `Drone_Test_TRO` compares them with its own run and refuses a
@@ -192,15 +211,15 @@ mismatch.
 
 ## FAME's bundle
 
-FAME's bundle is the bundle of PPO fine-tuning (same policy and value descriptions, optimizer, normalizers
-and schedule) with the equation identifier `crazysim_fame_4d17470_v4` and one more entry,
+FAME's bundle is the bundle of PPO fine-tuning (same policy and value descriptions, optimizer, value
+normalizer and schedule) with the equation identifier `crazysim_fame_4d17470_v4` and one more entry,
 `agent_modules.fame_memory`:
 
 | Entry | Content |
 | --- | --- |
 | `version`, `core_equations_version` | `3` and the equation identifier |
 | `meta_policy` | Mean network and `log_std_parameter` of the meta learner, with the parameter names of the policy |
-| `meta_state_preprocessor` | The meta learner's observation normalizer (mean, variance, count) |
+| `meta_state_preprocessor` | Null (no observation normalization); with the normalizer turned on, the meta learner's own (mean, variance, count) |
 | `meta` | Buffer of states of earlier shapes: `data`, `index`, `size` |
 | `fast2meta` | Buffer of states of this shape, visited by the handed-over fast learner in simulation |
 
@@ -212,8 +231,8 @@ version 2 (the earlier variant) is refused.
 `Drone_Test_TRO` continues this bundle with FAME on the PPO learner it runs for fine-tuning
 (`examples/setpoint/fame_ppo.py`, `TRANSFER_BUNDLE.md` there): it restores `fame_memory`, adds the state
 of every accepted real transition to `fast2meta`, and when the shape ends distills the meta learner once
-as `Fame._train_meta` does (normalizer set to the statistics of all distillation states, then the
-Wasserstein-like loss on pre-tanh mean and standard deviation). `fast2meta` holds `size_fast2meta` simulated
+as `Fame._train_meta` does (with a normalizer, it is first set to the statistics of all distillation
+states; then the Wasserstein-like loss on pre-tanh mean and standard deviation). `fast2meta` holds `size_fast2meta` simulated
 states when it arrives, so each real state replaces the oldest simulated one: with the default of
 100000, the distillation states stay almost entirely simulated unless the real stage is very long.
 
@@ -227,7 +246,8 @@ The checks train a few steps on the CPU with the unchanged method classes and a 
 environment, write bundles, and load them with the loader of the `Drone_Test_TRO` checkout next to this
 repository (`DRONE_TEST_ROOT` if it is elsewhere). They need PyTorch, skrl, Gymnasium, PyYAML and pytest,
 not Isaac Sim. For all five methods they compare the mean action and the action noise of the two learners
-on the same observations, take a training step on the real side, and cover Square to Circle, a start from
+on the same observations, take a training step on the real side, and cover Square to Circle (also from a
+Square with observation normalization), the refusal of a parent whose normalization differs, a start from
 a finalized real stage, a two-shape chain and the selection of an earlier best checkpoint. They also
 compare likelihoods and their gradients where the mean action saturates. For FAME they compare the meta
 learner and its buffers on both sides, and check that the consolidation of `Drone_Test_TRO` gives the same

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from .base import Method
 
 
@@ -51,3 +53,36 @@ class Finetune(Scratch):
         # "carried_checkpoint": sessions made before every method selected the best checkpoint
         last = stages[-1]
         self.checkpoint = last.get("selected_checkpoint", last.get("carried_checkpoint"))
+
+
+class FinetuneReset(Finetune):
+    """Like :class:`Finetune`, but only the learned networks carry over; the training state is new.
+
+    Carried from the best agent of the previous task: the policy's mean network, the value network and the
+    normalizers (observation normalization, when on, and value normalization). New at every task: the action
+    noise (``log_std_parameter`` back to ``initial_log_std``) and the optimizer (Adam moments, and the learning
+    rate back to its configured value, as the KL-adaptive schedule adjusts it in place).
+    """
+
+    name = "finetune_reset"
+
+    CARRIED = ("policy", "value", "state_preprocessor", "value_preprocessor")
+    """Entries of skrl's agent checkpoint loaded into the new agent; ``optimizer`` is left out."""
+
+    def start_stage(self, index, task, stage_dir):
+        agent = self.build_ppo_agent(self.new_mlp_actor(), stage_dir)
+        if self.checkpoint:
+            print(f"[INFO] Initializing networks from checkpoint (new optimizer and action noise): {self.checkpoint}")
+            saved = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
+            for name in self.CARRIED:
+                if name not in saved:
+                    continue
+                state = saved[name]
+                if name == "policy":
+                    state = {k: v for k, v in state.items() if k != "log_std_parameter"}
+                    missing, unexpected = agent.checkpoint_modules[name].load_state_dict(state, strict=False)
+                    if missing != ["log_std_parameter"] or unexpected:
+                        raise RuntimeError(f"Policy checkpoint mismatch: missing {missing}, unexpected {unexpected}")
+                else:
+                    agent.checkpoint_modules[name].load_state_dict(state)
+        return agent

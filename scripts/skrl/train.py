@@ -37,7 +37,7 @@ import sys
 from isaaclab.app import AppLauncher
 
 # names of crazysim.methods.METHODS (that module can only be imported after the app is launched)
-METHOD_NAMES = ["finetune", "scratch", "residual", "componet", "kae_moe", "fame"]
+METHOD_NAMES = ["finetune", "finetune_reset", "scratch", "residual", "componet", "kae_moe", "fame"]
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train policies with skrl on a sequence of tracking tasks.")
@@ -50,7 +50,8 @@ parser.add_argument(
     default="finetune",
     choices=METHOD_NAMES,
     help=(
-        "finetune: each task starts from the previous agent. scratch: each task starts from a new agent. "
+        "finetune: each task starts from the previous agent. finetune_reset: each task starts from the previous "
+        "agent's networks, with a new optimizer and action noise. scratch: each task starts from a new agent. "
         "residual, componet, kae_moe, fame: transfer methods (see crazysim/methods)."
     ),
 )
@@ -65,7 +66,10 @@ parser.add_argument(
 )
 parser.add_argument("--max_iterations", type=int, default=None, help="Training iterations per task.")
 parser.add_argument(
-    "--checkpoint", type=str, default=None, help="Agent checkpoint to initialize the first task (finetune, scratch)."
+    "--checkpoint",
+    type=str,
+    default=None,
+    help="Agent checkpoint to initialize the first task (finetune, finetune_reset, scratch).",
 )
 parser.add_argument(
     "--resume",
@@ -235,12 +239,15 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
                 f"--resume session used env.action_mode={previous_action_mode}, not {env_cfg.action_mode}."
             )
     # all tasks of the session, earlier ones (when resuming) included
-    all_tasks = (previous["tasks"] if previous else ["square"] if square_files else []) + tasks
+    # finished stages only: "tasks" of an interrupted session also lists the tasks it did not reach
+    all_tasks = (
+        [stage["task"] for stage in previous["stages"]] if previous else ["square"] if square_files else []
+    ) + tasks
     unknown = [task for task in all_tasks if task not in env_cfg.tasks]
     if unknown:
         raise ValueError(f"Unknown tasks {unknown}. Available tasks: {list(env_cfg.tasks.keys())}")
-    if args_cli.checkpoint and args_cli.method not in ("finetune", "scratch"):
-        raise ValueError("--checkpoint is only supported by the finetune and scratch methods.")
+    if args_cli.checkpoint and args_cli.method not in ("finetune", "finetune_reset", "scratch"):
+        raise ValueError("--checkpoint is only supported by the finetune, finetune_reset and scratch methods.")
     if args_cli.warm_start:
         if getattr(env_cfg, "action_mode", None) != "relative_waypoint":
             raise ValueError(
@@ -248,7 +255,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             )
         if tasks[0] not in SHAPES:
             raise ValueError(f"Drone_Test_TRO has no shape '{tasks[0]}'; --warm_start supports {', '.join(SHAPES)}.")
-        if args_cli.method == "scratch":
+        if args_cli.method in ("scratch", "finetune_reset"):
             raise ValueError("--warm_start is for finetune, residual, componet, kae_moe and fame.")
 
     # override configurations with non-hydra CLI arguments
@@ -318,7 +325,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
 
     set_seed(agent_cfg["seed"])
     method_kwargs = {}
-    if args_cli.method in ("finetune", "scratch") and args_cli.checkpoint:
+    if args_cli.method in ("finetune", "finetune_reset", "scratch") and args_cli.checkpoint:
         method_kwargs["checkpoint"] = retrieve_file_path(args_cli.checkpoint)
     method = METHODS[args_cli.method](env, agent_cfg, session_dir, **method_kwargs)
     trainer_cfg = {k: v for k, v in agent_cfg["trainer"].items() if k != "class"}

@@ -477,13 +477,40 @@ def completed_controller(bundle: Mapping, device="cpu") -> nn.Module:
             if key not in ("kind", "state", "min_log_std", "policy_initialization")
         }
         node = {"kind": kind, "state": _strip(node["state"], prefix), **fields}
-    elif bundle["agent_modules"].get("state_preprocessor") is not None:  # finetune, fame
+    elif bundle["agent_modules"].get("state_preprocessor") is not None:
+        # finetune, fame with observation normalization (off by default): the policy with its normalizer.
+        # Without it the policy description is the complete controller.
         checkpoint = finetune_checkpoint(bundle)
         node = ppo_controller_node(checkpoint)
     return freeze(controller_from_node(node, device))
 
 
 # -- parents: what a method starts a new shape from ----------------------------------------------------------
+
+
+def check_observation_normalization(method: Method, parent_normalizes: bool, parent: str):
+    """Raise unless a learner that ``method`` continues and the configuration agree on observation normalization.
+
+    PPO fine-tuning and FAME continue the policy of their parent, so the agent must normalize observations exactly
+    when the parent did. skrl loads a checkpoint entry only into a module the agent has: without this check, the
+    normalizer of an earlier Square or real result (observation normalization was on until master de15ad5) would be
+    dropped with a warning, and the policy would run on observations it was not trained on. Residual, CompoNet and
+    KAE-MoE need no check: a frozen earlier policy keeps its own normalizer.
+    """
+    configured = bool(method.agent_cfg["agent"].get("state_preprocessor"))
+    if parent_normalizes == configured:
+        return
+    if parent_normalizes:
+        raise ValueError(
+            f"{parent} was trained with observation normalization, and the configuration has none "
+            "(agent.state_preprocessor: null, the default since master de15ad5). Train it again with the current "
+            "configuration, or continue the earlier chain with the Hydra override "
+            "agent.agent.state_preprocessor=RunningStandardScaler."
+        )
+    raise ValueError(
+        f"{parent} was trained without observation normalization, and the configuration turns it on "
+        "(agent.state_preprocessor). Remove the override."
+    )
 
 
 def seed_from_square(
@@ -519,6 +546,9 @@ def seed_from_square(
     for name, path in given.items():
         if not os.path.isfile(path):
             raise FileNotFoundError(f"--square_{name}: no file {path}")
+    if method.name in ("finetune", "fame"):
+        saved = torch.load(given["checkpoint"], map_location="cpu", weights_only=False)
+        check_observation_normalization(method, "state_preprocessor" in saved, "The Square of --square_checkpoint")
     if method.name == "finetune":
         method.checkpoint = given["checkpoint"]
     elif method.name == "kae_moe":
@@ -536,6 +566,9 @@ def seed_from_square(
                 raise ValueError(
                     "--square_meta_policy was made with FAME's earlier PPO variant; train FAME's Square again."
                 )
+            check_observation_normalization(
+                method, meta.preprocessor is not None, "The meta learner of --square_meta_policy"
+            )
             method.meta = meta.train()
             method.meta_buffer.add(method._visited_states(agent, "square"))
         else:
@@ -590,8 +623,9 @@ def check_parent_bundle(bundle: Mapping, method_name: str, task: str, allow_shap
 
 
 def finetune_checkpoint(bundle: Mapping) -> dict:
-    """Agent checkpoint of this repository (policy, value, optimizer, normalizers) from a bundle of the plain
-    waypoint PPO agent (PPO fine-tuning, FAME's fast learner)."""
+    """Agent checkpoint of this repository (policy, value, optimizer, value normalizer and, if the bundle has
+    one, observation normalizer) from a bundle of the plain waypoint PPO agent (PPO fine-tuning, FAME's fast
+    learner)."""
     modules = bundle["agent_modules"]
     names = {"log_std_parameter": "log_std_parameter"}
     for native, canonical in WAYPOINT_POLICY_LAYERS:
@@ -628,6 +662,9 @@ def seed_from_bundle(method: Method, bundle: Mapping, task: str, work_dir: str, 
     check_parent_bundle(bundle, method.name, task, allow_shape_skip)
     next_stage = bundle["manifest"]["next_stage"]
     if method.name == "finetune":
+        check_observation_normalization(
+            method, bundle["agent_modules"].get("state_preprocessor") is not None, "The parent bundle"
+        )
         os.makedirs(work_dir, exist_ok=True)
         method.checkpoint = os.path.join(work_dir, "parent_agent.pt")
         torch.save(finetune_checkpoint(bundle), method.checkpoint)
@@ -673,7 +710,8 @@ def fame_memory(method: Method, task_states: torch.Tensor | None = None) -> dict
 
     - ``meta_policy``: the meta learner's mean network and log standard deviation, with the parameter names of
       the fast learner's policy (``CrazySimWaypointPolicy``).
-    - ``meta_state_preprocessor``: the meta learner's own observation normalization, or None.
+    - ``meta_state_preprocessor``: None without observation normalization (the default); otherwise the meta
+      learner's own normalization.
     - ``meta``: the buffer of states of earlier tasks.
     - ``fast2meta`` (with ``task_states``): states of the current task visited by the handed-over fast learner,
       in a buffer of ``size_fast2meta`` rows. The real stage adds its own; the consolidation that ends the
@@ -722,11 +760,7 @@ def restore_fame_memory(method: Method, record: Mapping):
     except (KeyError, RuntimeError) as error:
         raise ValueError(f"The parent meta learner does not match the policy network (models: policy): {error}")
     saved, preprocessor = record["meta_state_preprocessor"], None
-    if (saved is None) != (not method.agent_cfg["agent"].get("state_preprocessor")):
-        raise ValueError(
-            "The parent meta learner and the configuration (agent.state_preprocessor) disagree on observation "
-            "normalization."
-        )
+    check_observation_normalization(method, saved is not None, "The meta learner of the parent bundle")
     if saved is not None:
         # the class of the agents' normalization; MetaPolicy copies the agent's when it is first built
         from skrl.resources.preprocessors.torch import RunningStandardScaler

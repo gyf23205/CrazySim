@@ -191,8 +191,8 @@ def train_kae(
             _, latent_in, _ = kae(edmd_in)
             _, latent_out, _ = kae(edmd_out)
 
-            #_, latent_in, _ = kae(inputs)
-            #_, latent_out, _ = kae(outputs)
+            # _, latent_in, _ = kae(inputs)
+            # _, latent_out, _ = kae(outputs)
             kae.compute_koopman_operator(latent_in, latent_out)
             if not torch.isfinite(kae.K).all():
                 raise FloatingPointError(f"Koopman operator contains NaN or Inf at epoch {epoch + 1}.")

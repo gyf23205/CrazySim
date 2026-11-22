@@ -47,14 +47,11 @@ os.makedirs(deploy_dir, exist_ok=True)
 
 checkpoint = torch.load(os.path.join(args.stage_dir, "checkpoints", "best_agent.pt"), map_location="cpu", weights_only=False)
 policy_state = rename_policy_state(checkpoint["policy"])
-torch.save(
-    {
-        "policy": policy_state,
-        "state_preprocessor": OrderedDict((k, v.cpu()) for k, v in checkpoint["state_preprocessor"].items()),
-        "observation_contract": CONTRACT,
-    },
-    os.path.join(deploy_dir, "deployable_policy_checkpoint.pt"),
-)
+deployable = {"policy": policy_state, "observation_contract": CONTRACT}
+# skrl saves the observation normalization only when agent.state_preprocessor is set (off by default)
+if "state_preprocessor" in checkpoint:
+    deployable["state_preprocessor"] = OrderedDict((k, v.cpu()) for k, v in checkpoint["state_preprocessor"].items())
+torch.save(deployable, os.path.join(deploy_dir, "deployable_policy_checkpoint.pt"))
 print(f"[INFO] Wrote {os.path.join(deploy_dir, 'deployable_policy_checkpoint.pt')}")
 
 kae_path = os.path.join(args.stage_dir, "kae", "kae_state.pt")

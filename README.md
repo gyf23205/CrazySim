@@ -102,6 +102,7 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 | `--method` | stage 0 | stage k > 0 | reference code in `less_leg_walking_1` |
 |---|---|---|---|
 | `finetune` | MLP policy | starts from the best agent (policy, value network, optimizer) of stage k-1 | - |
+| `finetune_reset` | MLP policy | starts from the networks and normalizers of the best agent of stage k-1; new optimizer and action noise | - |
 | `scratch` | MLP policy | new MLP policy; reference for how much the other methods transfer | `train_scratch.py` |
 | `residual` | MLP policy | frozen policy of stage k-1 plus a new residual MLP whose output layer starts at zero; base + residual becomes the next base | `res_net.py`, `train_res_CRL.py` |
 | `componet` | MLP policy | new CompoNet unit attending over the frozen units of stages 0..k-1 | `baselines/CompoNet.py`, `train_componet_CRL.py` |
@@ -118,10 +119,11 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
   best agent and the other methods kept the final one.
 - All methods use the same skrl PPO settings and differ only in the policy network and in what they carry between
   stages. Policy and value networks are separate. The value network and the action noise are new at every stage,
-  except for `finetune` and for `fame` when it starts from the meta learner (which sets the action noise).
-- `fame`'s fast learner is this PPO agent. With observation normalization (waypoint configuration), the meta learner
-  has its own normalization, set to the mean and variance of all states it is distilled on, and passes it to the
-  fast learner it initializes. Sessions made before 2026-11-14 used the reference's own PPO variant
+  except for `finetune` (`finetune_reset` carries the value network only) and for `fame` when it starts from the meta learner (which sets the action noise).
+- `fame`'s fast learner is this PPO agent. Observation normalization is off by default in both configurations. If
+  it is turned on (`agent.agent.state_preprocessor=RunningStandardScaler`, `fame`, `scratch`, `finetune` and `finetune_reset` only),
+  the meta learner has its own normalization, set to the mean and variance of all states it is distilled on, and
+  passes it to the fast learner it initializes. Sessions made before 2026-11-14 used the reference's own PPO variant
   instead (tanh-squashed actions, state-dependent noise, entropy temperature tuned toward a target entropy, own
   learning rates and initialization, 6x more gradient steps per iteration); their results are not comparable with
   the other methods, and they cannot be resumed with the current code.
@@ -135,10 +137,10 @@ python scripts/skrl/train.py --tasks circle rectangle figure8 --method kae_moe -
 Options:
 
 - `--max_iterations N`: iterations per task (default 1000; one iteration = 24 steps of every environment).
-- `--checkpoint PATH`: initialize the first task of `finetune` or `scratch` from an agent checkpoint.
+- `--checkpoint PATH`: initialize the first task of `finetune`, `finetune_reset` or `scratch` from an agent checkpoint.
 - `--resume SESSION_DIR`: continue a finished session of the same method with the tasks of `--tasks` as further
   stages (e.g. `--tasks star vertical_circle`). The method state after the session's last stage is restored from its
-  files (`finetune`: the carried checkpoint; `residual`, `componet`: the stage policies; `kae_moe`: the KAEs; `fame`:
+  files (`finetune`, `finetune_reset`: the carried checkpoint; `residual`, `componet`: the stage policies; `kae_moe`: the KAEs; `fame`:
   the meta learner, with its buffer of earlier-task states refilled by rolling out each stage's best fast learner). A new
   session directory is created; its `session.json` lists the earlier stages too, and the earlier policies are
   evaluated on the new tasks to complete the transfer matrix.
@@ -193,14 +195,14 @@ firmware controller, instead of thrusts. Results and every difference from that 
 Waypoint tasks: `square`, `circle`, `triangle`, `figure8` (shapes of `Drone_Test_TRO`), and `rectangle`, `star`,
 `vertical_circle` (the shapes of the continual-learning sequence, 1.5x larger like the circle; the vertical circle
 has radius 0.6 m around 1.0 m height). All are flown at 0.25 m/s, two laps per episode. Continual learning on
-waypoint control works with every method. `residual`, `componet` and `kae_moe` run frozen policies of earlier tasks
-on raw observations, so they need the observation normalization of
-[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml) off:
-append the Hydra override `agent.agent.state_preprocessor=null`. As in `Drone_Test_TRO`, every method's network
+waypoint control works with every method. Observation normalization is off for every method in
+[skrl_ppo_waypoint_cfg.yaml](source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml)
+(`agent.state_preprocessor: null`); `residual`, `componet` and `kae_moe` require it off, because they run frozen
+policies of earlier tasks on raw observations. As in `Drone_Test_TRO`, every method's network
 returns the pre-tanh mean `u` of the tanh-squashed Gaussian policy and the action is `tanh(u)`, so no clamp zeroes
 the policy gradient: `residual` adds its residual to `atanh` of the base action, `componet` averages `atanh` of the
-earlier units' actions, and the `kae_moe` blend is `u` itself. Example:
-`python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method kae_moe --headless --tasks circle rectangle agent.agent.state_preprocessor=null`.
+earlier units' actions, and the `kae_moe` blend is `u` itself. Five-task results: [docs/continual_learning_results_waypoint.md](docs/continual_learning_results_waypoint.md). Example:
+`python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method kae_moe --headless --tasks circle rectangle`.
 
 ```bash
 python scripts/skrl/train.py --env_id CrazySim-TrackingWaypoint-Direct-v0 --method fame --headless \

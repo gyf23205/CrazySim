@@ -3,8 +3,9 @@
 Each test trains a few steps with the unchanged method classes, writes the bundle, loads it with the
 loader of ``Drone_Test_TRO`` and compares the two learners on the same observations.
 
-FAME is checked on this side only (the last tests): ``Drone_Test_TRO`` still implements FAME's earlier PPO
-variant and refuses the equation identifier of the current one.
+Observation normalization is off for every method (master de15ad5), so PPO fine-tuning and FAME hand over
+no observation normalizer. The tests marked ``normalize`` repeat the handoff with the normalizer turned on
+(``agent.state_preprocessor: RunningStandardScaler``), which the configuration still allows for them.
 """
 
 import copy
@@ -91,8 +92,10 @@ class TensorEnv:
         return None
 
 
-def agent_cfg(method: str) -> dict:
-    """The waypoint agent configuration with small training settings for the CPU."""
+def agent_cfg(method: str, normalize: bool = False) -> dict:
+    """The waypoint agent configuration with small training settings for the CPU.
+
+    ``normalize``: with the Hydra override ``agent.agent.state_preprocessor=RunningStandardScaler``."""
     path = ROOT / "source/crazysim/crazysim/tasks/direct/tracking/agents/skrl_ppo_waypoint_cfg.yaml"
     cfg = yaml.safe_load(path.read_text())
     cfg["agent"].update(rollouts=ROLLOUTS, learning_epochs=1, mini_batches=1)
@@ -103,8 +106,9 @@ def agent_cfg(method: str) -> dict:
     cfg["methods"]["fame"].update(
         size_fast2meta=32, size_meta=64, detection_steps=4, epoch_meta=1, meta_batch_size=4
     )
-    if METHODS[method].reuses_policies:  # as scripts/skrl/train.py
-        cfg["agent"].update(state_preprocessor=None, state_preprocessor_kwargs=None)
+    assert cfg["agent"]["state_preprocessor"] is None  # no observation normalization for any method
+    if normalize and not METHODS[method].reuses_policies:  # scripts/skrl/train.py turns it off for the others
+        cfg["agent"].update(state_preprocessor="RunningStandardScaler")
     return cfg
 
 
@@ -236,29 +240,44 @@ def check_real_import(real, method_name, agent, policy, info, task):
     return bundle, target
 
 
-@pytest.fixture
-def square_stage(tmp_path):
+def scratch_square(tmp_path, normalize=False, name="square_scratch"):
     """A Square trained with ``--method scratch`` and a KAE file next to it, as ``fit_kae.py`` leaves them."""
     torch.manual_seed(3)
     env = TensorEnv()
     stage = finished_stage(
-        METHODS["scratch"](env, agent_cfg("scratch"), str(tmp_path)), env, tmp_path, "square_scratch"
+        METHODS["scratch"](env, agent_cfg("scratch", normalize), str(tmp_path)), env, tmp_path, name
     )
-    kae_dir = tmp_path / "square_scratch" / "0_square" / "kae"
+    kae_dir = tmp_path / name / "0_square" / "kae"
     kae_dir.mkdir()
     torch.save(KoopmanAutoencoder(57, 64, 16, "cpu"), kae_dir / "kae.pt")
     return stage
 
 
-@pytest.mark.parametrize("method_name", SHARED)
-def test_circle_warm_up_from_shared_square_continues_on_the_real_side(real, square_stage, tmp_path, method_name):
+@pytest.fixture
+def square_stage(tmp_path):
+    return scratch_square(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "method_name,normalize", [(name, False) for name in SHARED] + [(name, True) for name in SHARED]
+)
+def test_circle_warm_up_from_shared_square_continues_on_the_real_side(real, tmp_path, method_name, normalize):
+    """``normalize``: the Square was trained with observation normalization. PPO fine-tuning continues it with
+    the normalizer; the other methods freeze the Square policy with its normalizer and train on raw observations."""
+    square_stage = scratch_square(tmp_path, normalize)
     torch.manual_seed(11)
     env = TensorEnv()
-    method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
+    method = METHODS[method_name](env, agent_cfg(method_name, normalize), str(tmp_path))
     files = seed_square(method, square_stage)
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
     bundle, target = check_real_import(real, method_name, agent, policy, info, "circle")
 
+    # only PPO fine-tuning with the normalizer turned on hands one over, and the real learner then has one too
+    live = normalize and method_name == "finetune"
+    assert ("state_preprocessor" in bundle["agent_modules"]) == live
+    assert (bundle["agent_configuration"]["preprocessors"]["state_preprocessor"] is not None) == live
+    assert ("state_preprocessor" in target.checkpoint_modules) == live
+    assert bundle["agent_configuration"]["preprocessors"]["value_preprocessor"] is not None
     assert bundle["manifest"]["parent"] is None
     assert bundle["manifest"]["simulation_parent"] == {"shape": "square", "files": files}
     states = torch.randn(5, 56)
@@ -435,7 +454,8 @@ def test_chain_square_circle_real_triangle_real(real, square_stage, tmp_path, me
     if method_name == "residual":
         assert policy_node["chain_depth"] == 2 and policy_node["base"]["chain_depth"] == 1
     if method_name == "componet":
-        assert [prior["kind"] for prior in policy_node["priors"]] == ["DeployablePolicy", "CompoNetCore"]
+        # the Square policy takes raw observations (no normalizer), so it is the bare actor
+        assert [prior["kind"] for prior in policy_node["priors"]] == ["BoundedDeterministicActor", "CompoNetCore"]
     if method_name == "kae_moe":
         assert len(policy_node["kae"]["blocks"]) == 2 and policy_node["kae"]["origins"][0].startswith(
             "simulation-square:"
@@ -516,10 +536,11 @@ def test_real_policy_samples_as_this_repository_without_a_clamp(real, square_sta
     torch.testing.assert_close(theirs.bias.grad, ours.bias.grad, rtol=1e-4, atol=1e-4)
 
 
-def fame_square(env, tmp_path):
+def fame_square(env, tmp_path, normalize=False):
     """FAME after its own Square stage, started from that stage's files as ``--square_...`` does."""
-    stage = finished_stage(METHODS["fame"](env, agent_cfg("fame"), str(tmp_path)), env, tmp_path, "square_fame")
-    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))  # a new process
+    cfg = agent_cfg("fame", normalize)
+    stage = finished_stage(METHODS["fame"](env, copy.deepcopy(cfg), str(tmp_path)), env, tmp_path, "square_fame")
+    method = METHODS["fame"](env, cfg, str(tmp_path))  # a new process
     return method, seed_square(method, stage)
 
 
@@ -598,10 +619,11 @@ def test_fame_meta_distilled_on_its_own_starts_a_warm_up_like_the_one_step_start
     assert method.meta_buffer.size == one_step.meta_buffer.size
 
 
-def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
+@pytest.mark.parametrize("normalize", [False, True])
+def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path, normalize):
     torch.manual_seed(13)
     env = TensorEnv()
-    method, files = fame_square(env, tmp_path)
+    method, files = fame_square(env, tmp_path, normalize)
     square_states = method.meta_buffer.all().clone()
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
     assert agent.detection["choice"] in ("meta", "fresh")
@@ -615,7 +637,8 @@ def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
     assert bundle["agent_configuration"]["settings"]["fame_core"]["epoch_meta"] == 1
     # the fast learner is the plain PPO learner: the description of PPO fine-tuning, with FAME's identifier
     assert bundle["architecture"]["policy"]["kind"] == "CrazySimWaypointPolicy"
-    assert set(modules) == {"policy", "value", "optimizer", "state_preprocessor", "value_preprocessor", "fame_memory"}
+    expected = {"policy", "value", "optimizer", "value_preprocessor", "fame_memory"}
+    assert set(modules) == expected | ({"state_preprocessor"} if normalize else set())
     states = torch.randn(9, 56)
     mean, log_std = simulation_distribution(agent, states)
     with torch.no_grad():
@@ -623,7 +646,12 @@ def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
         torch.testing.assert_close(ws.completed_controller(bundle)(states), mean, rtol=2e-5, atol=3e-6)
     checkpoint = ws.finetune_checkpoint(bundle)
     torch.testing.assert_close(checkpoint["policy"]["log_std_parameter"], log_std)
-    torch.testing.assert_close(checkpoint["state_preprocessor"]["running_mean"], agent._state_preprocessor.running_mean)
+    if normalize:
+        torch.testing.assert_close(
+            checkpoint["state_preprocessor"]["running_mean"], agent._state_preprocessor.running_mean
+        )
+    else:
+        assert "state_preprocessor" not in checkpoint and "value_preprocessor" in checkpoint
 
     memory = modules["fame_memory"]
     assert memory["version"] == ws.FAME_MEMORY_VERSION
@@ -631,9 +659,12 @@ def test_fame_warm_up_hands_over_the_ppo_learner_and_its_memory(tmp_path):
     assert memory["meta"]["size"] == square_states.shape[0] == 32 and memory["meta"]["data"].shape[0] == 64
     torch.testing.assert_close(memory["meta"]["data"][:32], square_states)
     torch.testing.assert_close(memory["meta_policy"]["log_std_parameter"], method.meta.log_std)
-    torch.testing.assert_close(
-        memory["meta_state_preprocessor"]["running_variance"], method.meta.preprocessor.running_variance
-    )
+    if normalize:
+        torch.testing.assert_close(
+            memory["meta_state_preprocessor"]["running_variance"], method.meta.preprocessor.running_variance
+        )
+    else:  # no observation normalization: the meta learner has none either
+        assert memory["meta_state_preprocessor"] is None and method.meta.preprocessor is None
 
 
 def test_fame_next_shape_starts_from_the_consolidated_state_of_the_parent(tmp_path):
@@ -665,20 +696,24 @@ def test_fame_next_shape_starts_from_the_consolidated_state_of_the_parent(tmp_pa
         circle["manifest"]["cumulative_counters"]["accepted_transitions"] + spent
     )
 
-    # a parent of FAME's earlier PPO variant, and a parent without observation normalization, are refused
+    # a parent of FAME's earlier PPO variant, and a parent with observation normalization (as before master
+    # de15ad5) under the current configuration, are refused
     state = parent["manifest"]["next_stage"]["consolidated_fame_state"]
+    assert state["meta_state_preprocessor"] is None
     with pytest.raises(ValueError, match="earlier PPO variant"):
         ws.restore_fame_memory(restored, {**state, "version": 2})
-    with pytest.raises(ValueError, match="observation normalization"):
-        ws.restore_fame_memory(restored, {**state, "meta_state_preprocessor": None})
+    normalizer = {"running_mean": torch.zeros(56), "running_variance": torch.ones(56), "current_count": torch.ones(())}
+    with pytest.raises(ValueError, match="trained with observation normalization"):
+        ws.restore_fame_memory(restored, {**state, "meta_state_preprocessor": normalizer})
 
 
-def test_fame_chain_circle_real_triangle_real(real, tmp_path):
+@pytest.mark.parametrize("normalize", [False, True])
+def test_fame_chain_circle_real_triangle_real(real, tmp_path, normalize):
     """FAME's own Square -> simulation Circle -> real Circle (trained, consolidated and finalized there) ->
     simulation Triangle -> real Triangle."""
     torch.manual_seed(31)
     env = TensorEnv()
-    method, files = fame_square(env, tmp_path)
+    method, files = fame_square(env, tmp_path, normalize)
     agent, policy, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
     circle, target = check_real_import(real, "fame", agent, policy, info, "circle")  # one real update included
 
@@ -703,13 +738,19 @@ def test_fame_chain_circle_real_triangle_real(real, tmp_path):
     state = parent["manifest"]["next_stage"]["consolidated_fame_state"]
     assert "fast2meta" not in state and state["meta"]["size"] == 64  # Square and Circle
 
-    method = METHODS["fame"](env, agent_cfg("fame"), str(tmp_path))
+    method = METHODS["fame"](env, agent_cfg("fame", normalize), str(tmp_path))
     ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
     with torch.no_grad():
         torch.testing.assert_close(method.meta(states), target.meta(states), rtol=2e-5, atol=3e-6)
     torch.testing.assert_close(method.meta.log_std, target.meta.log_std)
     torch.testing.assert_close(method.meta_buffer.all(), target.memory_meta.all())
-    torch.testing.assert_close(method.meta.preprocessor.running_variance, target.meta.preprocessor.running_variance)
+    if normalize:
+        torch.testing.assert_close(
+            method.meta.preprocessor.running_variance, target.meta.preprocessor.running_variance
+        )
+    else:  # neither side normalizes observations, the real learner included
+        assert method.meta.preprocessor is None and target.meta.preprocessor is None
+        assert state["meta_state_preprocessor"] is None and "state_preprocessor" not in target.checkpoint_modules
 
     agent, policy, info = warm_up(method, env, tmp_path, "triangle", 2, parent=parent)
     assert agent.detection["choice"] in ("meta", "fresh")
@@ -718,11 +759,12 @@ def test_fame_chain_circle_real_triangle_real(real, tmp_path):
     assert target.memory_meta.size == 64 and target.memory_fast2meta.size == 32
 
 
-def test_fame_consolidation_on_the_real_side_is_the_distillation_of_this_repository(real, tmp_path):
+@pytest.mark.parametrize("normalize", [False, True])
+def test_fame_consolidation_on_the_real_side_is_the_distillation_of_this_repository(real, tmp_path, normalize):
     """The same learner, states and random numbers give the same meta learner as ``Fame._train_meta``."""
     torch.manual_seed(37)
     env = TensorEnv()
-    method, files = fame_square(env, tmp_path)
+    method, files = fame_square(env, tmp_path, normalize)
     agent, _, info = warm_up(method, env, tmp_path, "circle", 1, parent_square=files)
     bundle = real.load_transfer_bundle(info["transfer_bundle"])
     target = real._agent("fame", bundle)
@@ -747,7 +789,8 @@ def test_fame_consolidation_on_the_real_side_is_the_distillation_of_this_reposit
         assert not torch.allclose(method.meta(states), before, atol=1e-3)  # the distillation changed it
         torch.testing.assert_close(target.meta(states), method.meta(states), rtol=2e-5, atol=3e-6)
     torch.testing.assert_close(target.meta.log_std, method.meta.log_std, rtol=2e-5, atol=3e-6)
-    for name in ("running_mean", "running_variance", "current_count"):
+    assert (target.meta.preprocessor is None) == (method.meta.preprocessor is None) == (not normalize)
+    for name in ("running_mean", "running_variance", "current_count") if normalize else ():
         torch.testing.assert_close(
             getattr(target.meta.preprocessor, name), getattr(method.meta.preprocessor, name), check_dtype=False
         )
@@ -771,6 +814,34 @@ def test_fame_hands_over_the_best_checkpoint_within_the_budget(tmp_path):
     torch.testing.assert_close(modules["policy"]["net_container.0.weight"], best["policy"]["actor.0.weight"])
     torch.testing.assert_close(modules["policy"]["log_std_parameter"], best["policy"]["log_std_parameter"])
     assert bundle["manifest"]["learning_rate_at_selection"] == best["optimizer"]["param_groups"][0]["lr"]
+
+
+@pytest.mark.parametrize("method_name", ["finetune", "fame"])
+def test_parent_and_configuration_must_agree_on_observation_normalization(real, tmp_path, method_name):
+    """A Square or real result from before master de15ad5 has an observation normalizer. skrl would load its
+    policy into an agent without one and only warn, so the start is refused instead."""
+    env = TensorEnv()
+    for parent_normalizes in (True, False):
+        square = scratch_square(tmp_path, parent_normalizes, name=f"square_{parent_normalizes}")
+        method = METHODS[method_name](env, agent_cfg(method_name, normalize=not parent_normalizes), str(tmp_path))
+        with pytest.raises(ValueError, match="with observation" if parent_normalizes else "without observation"):
+            ws.seed_from_square(method, checkpoint=square["selected_checkpoint"])
+        assert getattr(method, "checkpoint", None) is None and getattr(method, "meta", None) is None
+
+    # a finalized real parent that normalized observations, as the real stages before the change
+    source = real._agent(method_name, normalize_observations=True)
+    for step in range(ROLLOUTS):
+        real._step(source, step)
+    parent = finalize_real_stage(real, source, method_name, "circle", "triangle", tmp_path)
+    method = METHODS[method_name](env, agent_cfg(method_name), str(tmp_path))
+    with pytest.raises(ValueError, match="agent.agent.state_preprocessor=RunningStandardScaler"):
+        ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
+    # with the override the earlier chain continues
+    method = METHODS[method_name](env, agent_cfg(method_name, normalize=True), str(tmp_path))
+    ws.seed_from_bundle(method, parent, "triangle", str(tmp_path / "parent"))
+    agent, policy, info = warm_up(method, env, tmp_path, "triangle", 2, parent=parent)
+    bundle, target = check_real_import(real, method_name, agent, policy, info, "triangle")
+    assert "state_preprocessor" in bundle["agent_modules"] and "state_preprocessor" in target.checkpoint_modules
 
 
 def test_only_the_standard_star_is_recorded():

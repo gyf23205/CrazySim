@@ -4,7 +4,9 @@ from .base import FINAL_CHECKPOINT, POLICY_FILE, DeterministicPolicy, Method
 from .componet import Componet
 from .fame import Fame
 from .kae_moe import KaeMoe
-from .ppo import Finetune, Scratch
+from .ppo import Finetune, FinetuneReset, Scratch
 from .residual import Residual
 
-METHODS: dict[str, type[Method]] = {m.name: m for m in [Finetune, Scratch, Residual, Componet, KaeMoe, Fame]}
+METHODS: dict[str, type[Method]] = {
+    m.name: m for m in [Finetune, FinetuneReset, Scratch, Residual, Componet, KaeMoe, Fame]
+}
