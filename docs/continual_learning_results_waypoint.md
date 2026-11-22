@@ -14,7 +14,7 @@ numbers come from the `session.json` file of each run unless stated otherwise.
   [waypoint_control_differences.md](waypoint_control_differences.md)). The policy is a tanh-squashed Gaussian: the
   network outputs the pre-tanh mean `u`, and the action is `tanh(u)`.
 - **Tasks.** The five shapes of the thrust-control sequence, 1.5x larger, flown at 0.25 m/s. The vertical circle has
-  radius 0.6 m around 1.0 m height. An episode is two laps (37.7 s); evaluation episodes start at the first reference
+  radius 0.6 m around 1.0 m height. An episode is two laps (30.2 s for the vertical circle to 48.8 s for the figure 8; 37.7 s for the circle); evaluation episodes start at the first reference
   point with ±0.1 m position noise.
 - **Training.** 500 PPO iterations per task (48000 environment steps, 4096 environments), seed 42. Every method keeps
   the best checkpoint of each task: the checkpoint with the highest mean training episode return.
@@ -162,6 +162,82 @@ where above 0.
   about its learning rate per step, and with `lr_meta: 1e-3`, decayed by 0.95 every 2 epochs over 200 epochs, at 23
   steps per epoch, the total is at most about 0.9.
 
+## Forward transfer and cost
+
+Computed from the logs and policy files of the same runs with `scripts/skrl/continual_metrics.py` (no new runs).
+
+### Forward transfer
+
+Forward transfer on task i (Wołczyk et al., 2021, Continual World, Eq. 2) compares the area under the learning curve
+with that of `scratch`: `FT_i = (AUC_i - AUC_i^b) / (1 - AUC_i^b)`. `AUC_i` is the mean success rate of the training
+episodes over the 48000 steps of task i, from TensorBoard (100 points), and `AUC_i^b` is the same for `scratch`.
+An episode succeeds if it reaches the end without a crash, with position RMSE ≤ 20 cm, cross-track RMSE ≤ 15 cm and
+at least 90% of its steps within 25 cm of the reference (`success_*` in `waypoint_env_cfg.py`). FT_i = 0: as
+`scratch`; FT_i = 1: success from the start; FT_i < 0: worse than `scratch`.
+
+| method | circle | rectangle | figure8 | star | vertical_circle | mean FT |
+|---|---|---|---|---|---|---|
+| finetune | 0.00 | 0.69 | 0.09 | 0.30 | −1.23 | −0.03 |
+| **finetune_reset** | 0.00 | **0.95** | 0.00 | **0.74** | **0.67** | **0.47** |
+| residual | 0.00 | 0.00 | 0.00 | 0.00 | 0.39 | 0.08 |
+| componet | 0.00 | 0.02 | 0.00 | 0.00 | −0.49 | −0.09 |
+| kae_moe | 0.00 | 0.01 | 0.00 | 0.08 | 0.61 | 0.14 |
+| fame (fast) | 0.00 | 0.00 | 0.00 | 0.00 | −1.23 | −0.25 |
+| *scratch AUC* | *0.473* | *0.008* | *0.000* | *0.001* | *0.551* | |
+
+- `finetune_reset` has the highest forward transfer: 0.95 on the rectangle, 0.74 on the star, 0.67 on the vertical
+  circle. `finetune` transfers to the rectangle (0.69) and the star (0.30), but succeeds in almost no training
+  episode of the vertical circle (AUC 0.001 vs 0.551 for `scratch`).
+- The frozen-policy methods and FAME's fast learner have forward transfer near 0 on the rectangle, figure 8 and star.
+  On the vertical circle, `residual` (0.39) and `kae_moe` (0.61) are positive, `componet` (−0.49) and FAME (−1.23)
+  negative.
+- No method transfers on the figure 8: the highest training success rate there is 0.09 (`finetune`).
+
+Limits of this measure:
+
+- **Training episodes use the stochastic policy.** It succeeds far less often than the deterministic policy is
+  accurate: `scratch` reaches 12.4 cm on the rectangle in evaluation, but succeeds in 0.8% of its training episodes.
+  Methods start tasks with different noise levels (see *Methods and what they carry*), which changes their training
+  success.
+- **`scratch` almost never succeeds on the rectangle, figure 8 and star** (AUC ≤ 0.008), so FT on those tasks is
+  close to the method's own AUC. It does not separate methods that all fail, such as 28 vs 34 cm on the figure 8.
+- **Shortened first episodes.** At the start of a stage, every episode gets a random elapsed time, so the episodes
+  that end within the first episode length (1508 to 2439 steps depending on the task, the first 4 to 6 points) are
+  shorter and pass more easily. Without those points, every FT changes by at most 0.12 and the ranking of the mean
+  FT is the same.
+- **Success rate is a lower bound.** Its denominator is `crashed + lost + time_out`; an episode that is both crashed
+  and lost counts twice.
+
+### Cost
+
+Model memory and inference compute of the policy after each stage (Díaz-Rodríguez et al., 2018). The value network is
+not counted (the same size for every method).
+
+| method | parameters after each stage | final memory [KiB] | MS | final kFLOPs per action | final CPU latency [µs] | stored states |
+|---|---|---|---|---|---|---|
+| scratch, finetune, finetune_reset | 8003 at every stage | 31 | 1.00 | 16 | 20 | 0 |
+| residual | 8003 / 16006 / 24009 / 32012 / 40015 | 156 | 0.46 | 79 | 124 | 0 |
+| componet | 8003 / 28166 / 48329 / 68492 / 88655 | 347 | 0.33 | 188 | 475 | 0 |
+| kae_moe | 8003 / 117829 / 218502 / 319175 / 419848 | 1650 | 0.23 | 836 | 397 | 0 |
+| fame (fast, meta) | 8003 + 8006 at every stage | 31 + 31 | 1.00 | 16 | 20 | 500000 (107 MiB) |
+
+- **Memory**: bytes of the parameters and buffers (float32).
+- **MS** (model size efficiency): `min(1, mean_i Mem(theta_1) / Mem(theta_i))`, where `Mem(theta_i)` is the memory
+  after task i; 1 means no growth.
+- **FLOPs per action**: floating-point operations of the matrix products of one forward pass (one multiply-add
+  counts as 2); activations are not counted.
+- **CPU latency**: median time of one forward pass on one observation, one CPU thread.
+- **Stored states**: FAME keeps 100000 states (56 floats each) of every task for distillation, in a FIFO buffer of
+  500000 that is allocated at full size from the first stage. No other method stores samples.
+
+The growing methods grow linearly with the number of tasks: `residual` by 8003 parameters per task, `componet` by
+20163, `kae_moe` by 100673 from the third task on (one KAE per earlier task; its router, weight, gate and MLP
+networks are rebuilt every task). After five tasks, the `kae_moe` policy has 52 times the parameters of an MLP policy
+and needs 53 times its FLOPs. FAME's two policies
+stay the size of one MLP each, but it stores 107 MiB of states. Training compute is not compared: run times are not
+comparable (see *Caveats*), and FAME (detection episodes, state collection) and `kae_moe` (observations for the KAE)
+use environment steps outside the 48000 training steps that are not counted here.
+
 ## Findings
 
 1. **`finetune_reset` learns each new task best.** It has the lowest error right after training on the rectangle
@@ -190,7 +266,11 @@ where above 0.
 - **One seed.** Differences of a few cm between methods are not established.
 - **`finetune_reset` was resumed.** Its run stopped during the star stage, when the Claude Code session that had
   launched it ended. Its star and vertical_circle stages continued the session in a new process (`--resume`), which
-  sets the seed again, so those two stages are not bit-identical to an uninterrupted run.
+  sets the seed again, so those two stages are not bit-identical to an uninterrupted run. They also ran with a
+  different physics rate: `--resume` re-applies the session's 50 Hz control rate with `set_control_frequency`,
+  which chose 200 Hz physics (`sim.dt` 0.005 s, decimation 4) instead of the 500 Hz of the waypoint configuration
+  (0.002 s, decimation 10; `params/env.yaml` of the resumed session). The same holds for every evaluation made in
+  the resumed process: the star and vertical_circle columns of the earlier rows, and the last two rows.
 - **FAME's result is reproducible.** A second run with the same settings (2026-11-20) gave identical numbers.
 - **Selection uses the training return.** The best checkpoint is chosen from the mean return of the stochastic
   policy during training, not from an evaluation of the deterministic policy. A method with a larger noise level
@@ -215,6 +295,13 @@ done
 python scripts/skrl/evaluate.py --headless --env_id CrazySim-TrackingWaypoint-Direct-v0 \
   --checkpoint logs/skrl/crazyflie_tracking_waypoint/<fame session>/*/meta_policy.pt \
   --output logs/skrl/crazyflie_tracking_waypoint/<fame session>/meta_policy_eval.json
+```
+
+Forward transfer and cost (Isaac Lab Python environment; Isaac Sim is not started):
+
+```bash
+python scripts/skrl/continual_metrics.py --sessions logs/skrl/crazyflie_tracking_waypoint/<session> ... \
+  --output metrics.json   # one session per method; the scratch session is the baseline
 ```
 
 The runs before 2026-11-20 were launched with the override `agent.agent.state_preprocessor=null`, which is now the
