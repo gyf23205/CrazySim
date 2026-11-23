@@ -21,6 +21,8 @@
 **/outputs/*
 **/videos/*
 **/wandb/*
+**/*.pdf
+**/*.png
 
 # Models
 **/*.pth

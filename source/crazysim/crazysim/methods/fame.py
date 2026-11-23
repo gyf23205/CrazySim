@@ -51,6 +51,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 
 from skrl.agents.torch import Agent
 
+from ..cost import policy_cost
 from .base import Method
 
 
@@ -173,6 +174,9 @@ class Fame(Method):
         print(f"[FAME] Meta distillation done in {time.time() - start:.1f} s")
         self.meta_buffer.add(states)
         torch.save(copy.deepcopy(self.meta).eval(), os.path.join(stage_dir, "meta_policy.pt"))
+        # sample storage cost: states of earlier tasks kept for the next distillation
+        self.stage_info["stored_states"] = self.meta_buffer.size
+        self.stage_info["meta_cost"] = policy_cost(self.meta, self.obs_dim)
         return self.ppo_policy(agent)
 
     def resume(self, stages):

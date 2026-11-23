@@ -169,6 +169,7 @@ from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import crazysim  # noqa: F401
+from crazysim.cost import policy_cost
 from crazysim.evaluation import METRICS, evaluate_tasks, format_table, load_policy, switch_task
 from crazysim.methods import FINAL_CHECKPOINT, METHODS, POLICY_FILE
 from crazysim.transfer_bundle import SHAPES, read_bundle
@@ -393,6 +394,7 @@ def main(env_cfg: TrackingEnvCfg, agent_cfg: dict):
             "policy": os.path.join(stage_dir, POLICY_FILE),
             "checkpoint": os.path.join(stage_dir, FINAL_CHECKPOINT),
             "minutes": (time.time() - start_time) / 60.0,
+            "cost": policy_cost(policy, method.obs_dim),
         }
         if getattr(agent, "detection", None):
             stage_info["detection"] = agent.detection

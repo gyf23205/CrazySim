@@ -153,7 +153,9 @@ Options:
 - `--num_envs`, `--seed`, `--run_name`, `--no_eval`.
 - Hydra overrides for the env and agent configurations, e.g. `env.tasks.circle.radius=0.8 agent.agent.learning_rate=3e-4`.
 
-Each run creates a session directory `logs/skrl/crazyflie_tracking/<time>_<method>_<tasks>[_<run_name>]/`:
+A **session** is one run of `train.py`: one method trained on the tasks of `--tasks` in order, one **stage** per task.
+Each session writes one directory `logs/skrl/<experiment>/<time>_<method>_<tasks>[_<run_name>]/`, where `<experiment>`
+is `agent.experiment.directory` of the agent configuration (e.g. `crazyflie_tracking`, `crazyflie_tracking_waypoint`):
 
 ```
 params/            env and agent configurations
@@ -183,6 +185,25 @@ To evaluate saved policies on any task list afterwards:
 ```bash
 python scripts/skrl/evaluate.py --headless --tasks circle rectangle figure8 \
     --checkpoint logs/skrl/crazyflie_tracking/<session>/*/policy.pt --output results.json
+```
+
+### Forward transfer and cost
+
+`session.json` also records the cost of each stage's policy (`cost`: parameters, bytes, FLOPs per action; see
+[cost.py](source/crazysim/crazysim/cost.py)); `fame` adds the meta learner's cost and the number of stored
+earlier-task states. `scripts/skrl/continual_metrics.py` computes, from finished sessions and without Isaac Sim:
+
+- forward transfer (Wołczyk et al., 2021, Continual World, Eq. 2) from the training success rate in TensorBoard,
+  against the `scratch` session: `FT_i = (AUC_i - AUC_i^b) / (1 - AUC_i^b)`;
+- cost: parameters after each stage, memory, model size efficiency `MS = min(1, mean_i Mem(theta_1) / Mem(theta_i))`
+  (Díaz-Rodríguez et al., 2018), FLOPs and CPU latency per action, and stored states.
+
+```bash
+# Isaac Lab Python environment (needs tensorboard and skrl)
+# --sessions: one session directory per method, all trained on the same task sequence
+python scripts/skrl/continual_metrics.py --sessions logs/skrl/<experiment>/<session> ... --output metrics.json
+# comparison figures (summary, forward transfer, transfer matrices, training and reward curves, cost) as PNG and PDF
+python scripts/skrl/plot_continual_metrics.py --metrics metrics.json --output_dir <figure directory>
 ```
 
 ## Waypoint control
