@@ -302,6 +302,13 @@ statements in this plan about `[256, 128, 64]` method networks no longer hold. T
 see the notice in [docs/warm_start.md](docs/warm_start.md)). Squares, KAEs, bundles and real results made
 before the merge were trained with the earlier policies.
 
+**Update, November 23, 2026: KAE-MoE router `[64, 32]` on the waypoint task.** Master 95b040f changed the
+router of the tracking configuration (`skrl_ppo_cfg.yaml`) from `[128]` to `[64, 32]` and left the waypoint
+configuration at `[128]`. The waypoint configuration of this branch and `Drone_Test_TRO` (`examples/MoE.py`)
+now use `[64, 32]` as well. This is the one method setting of the waypoint task that differs from master.
+KAE-MoE checkpoints and bundles with a `[128]` router no longer load; the Square (a plain PPO policy) and
+the fitted KAEs have no router and are unaffected.
+
 **Choices made while implementing, to confirm:**
 
 - **FAME's past states when coming back from a real stage** come from the real bundle (the states FAME

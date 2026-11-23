@@ -116,7 +116,9 @@ methods:
     p: 1  # power of the Koopman operator in the expert outputs
     residual_hidden_dims: [64, 64]  # MLP pathway
     weight_hidden_dims: [32]  # per-KAE mode-weight networks
-    router_hidden_dims: [128]  # router between KAEs
+    # router between KAEs. [128] on master; [64, 32] as the tracking configuration since master 95b040f.
+    # Drone_Test_TRO builds the same router (examples/MoE.py)
+    router_hidden_dims: [64, 32]
     gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
     kae:
       observation_samples: 30000  # observations recorded after training to fit the sampling distribution
