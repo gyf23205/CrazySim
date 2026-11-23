@@ -1,3 +1,6 @@
+# python scripts/skrl/train.py --tasks circle rectangle figure8 star vertical_circle --method kae_moe --headless
+# python scripts/skrl/train.py --tasks circle rectangle figure8 star vertical_circle --method finetune --headless
+
 seed: 42
 
 # Models are instantiated using skrl's model instantiator utility
@@ -89,11 +92,11 @@ methods:
     internal_hidden_dims: [256, 128, 64]  # internal policy; the first entry is also the attention dimension
   kae_moe:
     padded_dim: 69  # observations and actions are padded with ones to this size before the KAE (>= observation size)
-    observable_dim: 16  # KAE latent size = experts per KAE
+    observable_dim: 16 #16  # KAE latent size = experts per KAE
     p: 1  # power of the Koopman operator in the expert outputs
     residual_hidden_dims: [256, 128, 64]  # MLP pathway
     weight_hidden_dims: [32]  # per-KAE mode-weight networks
-    router_hidden_dims: [128]  # router between KAEs
+    router_hidden_dims: [64, 32] #[128]  # router between KAEs
     gating_hidden_dims: [32]  # gate between the KAE and MLP pathways
     kae:
       observation_samples: 30000  # observations recorded after training to fit the sampling distribution
