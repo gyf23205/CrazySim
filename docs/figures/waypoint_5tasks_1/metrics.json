@@ -1,0 +1,772 @@
+{
+  "baseline": "logs/skrl/crazyflie_tracking_waypoint/2026-11-19_17-38-21_scratch_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks_nonorm",
+  "methods": {
+    "scratch": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-19_17-38-21_scratch_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks_nonorm",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.007793098535860536,
+          "auc_after_first_episode": 0.007825268856217468,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.0002772188630769282,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.0006130031086596085,
+          "auc_after_first_episode": 0.00010950617487006423,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.5513436884979459,
+          "auc_after_first_episode": 0.5740188887095289,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "figure8": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "star": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "vertical_circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        }
+      },
+      "mean_ft": 0.0,
+      "mean_ft_after_first_episode": 0.0,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.000850781798363
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.853003323078156
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.89840529859066
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.05149144679308
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.01051325351
+            }
+          ],
+          "model_size_efficiency": 1.0
+        }
+      },
+      "stored_states": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "stored_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "finetune": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-19_17-38-41_finetune_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks_nonorm",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.6920071522238063,
+          "auc_after_first_episode": 0.7180745695774916,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.09140542829848851,
+          "auc_after_first_episode": 0.09673904787761181,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.298368777968215,
+          "auc_after_first_episode": 0.3138906532746763,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.0005520393621230577,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": 0.689588081556672,
+          "ft_after_first_episode": 0.7158510274722439
+        },
+        "figure8": {
+          "ft": 0.09115347889919753,
+          "ft_after_first_episode": 0.09673904787761181
+        },
+        "star": {
+          "ft": 0.29793841203232035,
+          "ft_after_first_episode": 0.31381551183612233
+        },
+        "vertical_circle": {
+          "ft": -1.2276471655816685,
+          "ft_after_first_episode": -1.3475219287789328
+        }
+      },
+      "mean_ft": -0.02979343861869572,
+      "mean_ft_after_first_episode": -0.044223268318590934,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.13507764786482
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.908882677555084
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.907020032405853
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.522158592939377
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.990140572190285
+            }
+          ],
+          "model_size_efficiency": 1.0
+        }
+      },
+      "stored_states": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "stored_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "residual": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-18_23-38-20_residual_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.006703664779301719,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.0005886654782663928,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.00024650960494864116,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.7243750150727405,
+          "auc_after_first_episode": 0.7534661760883351,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": -0.001097990504753802,
+          "ft_after_first_episode": -0.007886986647197183
+        },
+        "figure8": {
+          "ft": 0.0003115329780074388,
+          "ft_after_first_episode": 0.0
+        },
+        "star": {
+          "ft": -0.00036671830317081347,
+          "ft_after_first_episode": -0.00010951816778569722
+        },
+        "vertical_circle": {
+          "ft": 0.38566564681883986,
+          "ft_after_first_episode": 0.42125644218164265
+        }
+      },
+      "mean_ft": 0.07690249419778453,
+      "mean_ft_after_first_episode": 0.08265198747333195,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.925995729863644
+            },
+            {
+              "parameters": 16006,
+              "bytes": 64024,
+              "flops_per_action": 31488,
+              "cpu_latency_us": 46.77800461649895
+            },
+            {
+              "parameters": 24009,
+              "bytes": 96036,
+              "flops_per_action": 47232,
+              "cpu_latency_us": 73.78158625215292
+            },
+            {
+              "parameters": 32012,
+              "bytes": 128048,
+              "flops_per_action": 62976,
+              "cpu_latency_us": 100.48947297036648
+            },
+            {
+              "parameters": 40015,
+              "bytes": 160060,
+              "flops_per_action": 78720,
+              "cpu_latency_us": 127.82448902726173
+            }
+          ],
+          "model_size_efficiency": 0.45666666666666667
+        }
+      },
+      "stored_states": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "stored_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "componet": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-18_23-38-20_componet_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.026283234606832635,
+          "auc_after_first_episode": 0.018562372054365558,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.0005186590908128516,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.0016213768538470238,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.33193505798173234,
+          "auc_after_first_episode": 0.3445913927298547,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": 0.018635363293368883,
+          "ft_after_first_episode": 0.010821786587701462
+        },
+        "figure8": {
+          "ft": 0.00024150717808125598,
+          "ft_after_first_episode": 0.0
+        },
+        "star": {
+          "ft": 0.0010089922605797642,
+          "ft_after_first_episode": -0.00010951816778569722
+        },
+        "vertical_circle": {
+          "ft": -0.4890349804322524,
+          "ft_after_first_episode": -0.5385860778771256
+        }
+      },
+      "mean_ft": -0.0938298235400445,
+      "mean_ft_after_first_episode": -0.10557476189144196,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 27.06260420382023
+            },
+            {
+              "parameters": 28166,
+              "bytes": 112688,
+              "flops_per_action": 56588,
+              "cpu_latency_us": 140.35997446626425
+            },
+            {
+              "parameters": 48329,
+              "bytes": 193400,
+              "flops_per_action": 98980,
+              "cpu_latency_us": 253.07002943009138
+            },
+            {
+              "parameters": 68492,
+              "bytes": 274136,
+              "flops_per_action": 142920,
+              "cpu_latency_us": 372.61401303112507
+            },
+            {
+              "parameters": 88655,
+              "bytes": 354896,
+              "flops_per_action": 188408,
+              "cpu_latency_us": 486.58205196261406
+            }
+          ],
+          "model_size_efficiency": 0.3313147700998435
+        }
+      },
+      "stored_states": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "stored_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "kae_moe": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-18_23-38-20_kae_moe_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.016850877741325175,
+          "auc_after_first_episode": 0.017201233888869544,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.00025747506677393286,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.07785063899698011,
+          "auc_after_first_episode": 0.08138231287149426,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.8236279204289034,
+          "auc_after_first_episode": 0.8575337029327957,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": 0.009128921792519912,
+          "ft_after_first_episode": 0.00944991314366919
+        },
+        "figure8": {
+          "ft": -1.9749271173496662e-05,
+          "ft_after_first_episode": 0.0
+        },
+        "star": {
+          "ft": 0.07728501184083172,
+          "ft_after_first_episode": 0.08128170754550441
+        },
+        "vertical_circle": {
+          "ft": 0.6068882236814602,
+          "ft_after_first_episode": 0.6655572435228042
+        }
+      },
+      "mean_ft": 0.13865648160872768,
+      "mean_ft_after_first_episode": 0.15125777284239555,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.050909370183945
+            },
+            {
+              "parameters": 117829,
+              "bytes": 473876,
+              "flops_per_action": 234176,
+              "cpu_latency_us": 163.44396863132715
+            },
+            {
+              "parameters": 218502,
+              "bytes": 879128,
+              "flops_per_action": 434624,
+              "cpu_latency_us": 245.73353584855795
+            },
+            {
+              "parameters": 319175,
+              "bytes": 1284380,
+              "flops_per_action": 635072,
+              "cpu_latency_us": 330.3519915789366
+            },
+            {
+              "parameters": 419848,
+              "bytes": 1689632,
+              "flops_per_action": 835520,
+              "cpu_latency_us": 408.1319784745574
+            }
+          ],
+          "model_size_efficiency": 0.22956742350692289
+        }
+      },
+      "stored_states": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "stored_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "fame": {
+      "session": "logs/skrl/crazyflie_tracking_waypoint/2026-11-19_17-39-01_fame_circle-rectangle-figure8-star-vertical_circle_waypoint_5tasks_nonorm",
+      "tasks": [
+        "circle",
+        "rectangle",
+        "figure8",
+        "star",
+        "vertical_circle"
+      ],
+      "success_auc": {
+        "circle": {
+          "auc": 0.4728332244800662,
+          "auc_after_first_episode": 0.4922885958690062,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1885
+        },
+        "rectangle": {
+          "auc": 0.005926854995210815,
+          "auc_after_first_episode": 0.0013216268840433008,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1920
+        },
+        "figure8": {
+          "auc": 0.0002619883087156638,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 94,
+          "episode_length": 2439
+        },
+        "star": {
+          "auc": 0.00308823526318098,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 95,
+          "episode_length": 2149
+        },
+        "vertical_circle": {
+          "auc": 0.0010400562391063453,
+          "auc_after_first_episode": 0.0,
+          "points": 100,
+          "points_after_first_episode": 96,
+          "episode_length": 1508
+        }
+      },
+      "forward_transfer": {
+        "circle": {
+          "ft": 0.0,
+          "ft_after_first_episode": 0.0
+        },
+        "rectangle": {
+          "ft": -0.0018809015920931594,
+          "ft_after_first_episode": -0.006554936109566856
+        },
+        "figure8": {
+          "ft": -1.5234777729025658e-05,
+          "ft_after_first_episode": 0.0
+        },
+        "star": {
+          "ft": 0.0024767504102222115,
+          "ft_after_first_episode": -0.00010951816778569722
+        },
+        "vertical_circle": {
+          "ft": -1.2265594356991902,
+          "ft_after_first_episode": -1.3475219287789328
+        }
+      },
+      "mean_ft": -0.24519576433175802,
+      "mean_ft_after_first_episode": -0.2708372766112571,
+      "cost": {
+        "policy": {
+          "stages": [
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.083971321582794
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.12099139392376
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 19.990024156868458
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.044855773448944
+            },
+            {
+              "parameters": 8003,
+              "bytes": 32012,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.009931176900864
+            }
+          ],
+          "model_size_efficiency": 1.0
+        },
+        "meta_policy": {
+          "stages": [
+            {
+              "parameters": 8006,
+              "bytes": 32024,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.456966012716293
+            },
+            {
+              "parameters": 8006,
+              "bytes": 32024,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.530540496110916
+            },
+            {
+              "parameters": 8006,
+              "bytes": 32024,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.42599953711033
+            },
+            {
+              "parameters": 8006,
+              "bytes": 32024,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.422041416168213
+            },
+            {
+              "parameters": 8006,
+              "bytes": 32024,
+              "flops_per_action": 15744,
+              "cpu_latency_us": 20.47303132712841
+            }
+          ],
+          "model_size_efficiency": 1.0
+        }
+      },
+      "stored_states": [
+        100000,
+        200000,
+        300000,
+        400000,
+        500000
+      ],
+      "stored_bytes": [
+        22400000,
+        44800000,
+        67200000,
+        89600000,
+        112000000
+      ]
+    }
+  }
+}
