@@ -23,6 +23,8 @@
 **/wandb/*
 **/*.pdf
 **/*.png
+**/*.mp4
+**/*.zip
 
 # Models
 **/*.pth

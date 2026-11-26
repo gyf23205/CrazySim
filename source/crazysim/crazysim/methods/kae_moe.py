@@ -54,7 +54,15 @@ class MoEActor(nn.Module):
 
         self.last_gate = None
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+    def components(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Intermediate outputs of the forward pass (also used to analyse a trained policy).
+
+        Returns:
+            ``kae_actions``, ``mlp_actions``: (batch, action) outputs of the two pathways.
+            ``gate``: (batch, 1) weight of the KAE pathway.
+            ``router``: (batch, KAEs) share of the unit L1 budget of each KAE.
+            ``expert_weights``: (batch, modes) weight of each mode, the router share included.
+        """
         with torch.no_grad():
             padded_obs = pad(obs, self.padded_dim)
             experts_outputs = torch.cat([kae(padded_obs) for kae in self.kaes], dim=1)  # (batch, modes, action)
@@ -67,12 +75,20 @@ class MoEActor(nn.Module):
             branch_weights.append(branch_w * kae_router[:, index : index + 1])
         expert_weights = torch.cat(branch_weights, dim=1)
         kae_actions = torch.sum(expert_weights.view(-1, self.total_modes, 1) * experts_outputs, dim=1)
+        return {
+            "kae_actions": kae_actions,
+            "mlp_actions": self.mlp_network(obs),
+            "gate": torch.sigmoid(self.gating_network(obs)),
+            "router": kae_router,
+            "expert_weights": expert_weights,
+        }
 
-        mlp_actions = self.mlp_network(obs)
-        gate = torch.sigmoid(self.gating_network(obs))
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        parts = self.components(obs)
+        gate = parts["gate"]
         if not torch.is_grad_enabled():
             self.last_gate = gate.detach()
-        return gate * kae_actions + (1.0 - gate) * mlp_actions
+        return gate * parts["kae_actions"] + (1.0 - gate) * parts["mlp_actions"]
 
     def train(self, mode: bool = True):
         super().train(mode)

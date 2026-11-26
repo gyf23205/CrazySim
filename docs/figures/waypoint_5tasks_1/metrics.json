@@ -78,31 +78,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.000850781798363
+              "cpu_latency_us": 20.000850781798363,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.853003323078156
+              "cpu_latency_us": 19.853003323078156,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.89840529859066
+              "cpu_latency_us": 19.89840529859066,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.05149144679308
+              "cpu_latency_us": 20.05149144679308,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.01051325351
+              "cpu_latency_us": 20.01051325351,
+              "trainable_parameters": 8003
             }
           ],
           "model_size_efficiency": 1.0
@@ -200,31 +205,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.13507764786482
+              "cpu_latency_us": 20.13507764786482,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.908882677555084
+              "cpu_latency_us": 19.908882677555084,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.907020032405853
+              "cpu_latency_us": 19.907020032405853,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.522158592939377
+              "cpu_latency_us": 20.522158592939377,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.990140572190285
+              "cpu_latency_us": 19.990140572190285,
+              "trainable_parameters": 8003
             }
           ],
           "model_size_efficiency": 1.0
@@ -322,31 +332,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.925995729863644
+              "cpu_latency_us": 19.925995729863644,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 16006,
               "bytes": 64024,
               "flops_per_action": 31488,
-              "cpu_latency_us": 46.77800461649895
+              "cpu_latency_us": 46.77800461649895,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 24009,
               "bytes": 96036,
               "flops_per_action": 47232,
-              "cpu_latency_us": 73.78158625215292
+              "cpu_latency_us": 73.78158625215292,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 32012,
               "bytes": 128048,
               "flops_per_action": 62976,
-              "cpu_latency_us": 100.48947297036648
+              "cpu_latency_us": 100.48947297036648,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 40015,
               "bytes": 160060,
               "flops_per_action": 78720,
-              "cpu_latency_us": 127.82448902726173
+              "cpu_latency_us": 127.82448902726173,
+              "trainable_parameters": 8003
             }
           ],
           "model_size_efficiency": 0.45666666666666667
@@ -444,31 +459,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 27.06260420382023
+              "cpu_latency_us": 27.06260420382023,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 28166,
               "bytes": 112688,
               "flops_per_action": 56588,
-              "cpu_latency_us": 140.35997446626425
+              "cpu_latency_us": 140.35997446626425,
+              "trainable_parameters": 20163
             },
             {
               "parameters": 48329,
               "bytes": 193400,
               "flops_per_action": 98980,
-              "cpu_latency_us": 253.07002943009138
+              "cpu_latency_us": 253.07002943009138,
+              "trainable_parameters": 20163
             },
             {
               "parameters": 68492,
               "bytes": 274136,
               "flops_per_action": 142920,
-              "cpu_latency_us": 372.61401303112507
+              "cpu_latency_us": 372.61401303112507,
+              "trainable_parameters": 20163
             },
             {
               "parameters": 88655,
               "bytes": 354896,
               "flops_per_action": 188408,
-              "cpu_latency_us": 486.58205196261406
+              "cpu_latency_us": 486.58205196261406,
+              "trainable_parameters": 20163
             }
           ],
           "model_size_efficiency": 0.3313147700998435
@@ -566,31 +586,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.050909370183945
+              "cpu_latency_us": 20.050909370183945,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 117829,
               "bytes": 473876,
               "flops_per_action": 234176,
-              "cpu_latency_us": 163.44396863132715
+              "cpu_latency_us": 163.44396863132715,
+              "trainable_parameters": 19637
             },
             {
               "parameters": 218502,
               "bytes": 879128,
               "flops_per_action": 434624,
-              "cpu_latency_us": 245.73353584855795
+              "cpu_latency_us": 245.73353584855795,
+              "trainable_parameters": 22118
             },
             {
               "parameters": 319175,
               "bytes": 1284380,
               "flops_per_action": 635072,
-              "cpu_latency_us": 330.3519915789366
+              "cpu_latency_us": 330.3519915789366,
+              "trainable_parameters": 24599
             },
             {
               "parameters": 419848,
               "bytes": 1689632,
               "flops_per_action": 835520,
-              "cpu_latency_us": 408.1319784745574
+              "cpu_latency_us": 408.1319784745574,
+              "trainable_parameters": 27080
             }
           ],
           "model_size_efficiency": 0.22956742350692289
@@ -688,31 +713,36 @@
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.083971321582794
+              "cpu_latency_us": 20.083971321582794,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.12099139392376
+              "cpu_latency_us": 20.12099139392376,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 19.990024156868458
+              "cpu_latency_us": 19.990024156868458,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.044855773448944
+              "cpu_latency_us": 20.044855773448944,
+              "trainable_parameters": 8003
             },
             {
               "parameters": 8003,
               "bytes": 32012,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.009931176900864
+              "cpu_latency_us": 20.009931176900864,
+              "trainable_parameters": 8003
             }
           ],
           "model_size_efficiency": 1.0
@@ -723,31 +753,36 @@
               "parameters": 8006,
               "bytes": 32024,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.456966012716293
+              "cpu_latency_us": 20.456966012716293,
+              "trainable_parameters": 8006
             },
             {
               "parameters": 8006,
               "bytes": 32024,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.530540496110916
+              "cpu_latency_us": 20.530540496110916,
+              "trainable_parameters": 8006
             },
             {
               "parameters": 8006,
               "bytes": 32024,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.42599953711033
+              "cpu_latency_us": 20.42599953711033,
+              "trainable_parameters": 8006
             },
             {
               "parameters": 8006,
               "bytes": 32024,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.422041416168213
+              "cpu_latency_us": 20.422041416168213,
+              "trainable_parameters": 8006
             },
             {
               "parameters": 8006,
               "bytes": 32024,
               "flops_per_action": 15744,
-              "cpu_latency_us": 20.47303132712841
+              "cpu_latency_us": 20.47303132712841,
+              "trainable_parameters": 8006
             }
           ],
           "model_size_efficiency": 1.0

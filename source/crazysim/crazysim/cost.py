@@ -17,6 +17,8 @@ def policy_cost(policy: nn.Module, obs_dim: int) -> dict:
 
     Returns:
         ``parameters``: number of parameters, frozen ones included.
+        ``trainable_parameters``: number of parameters trained in the policy's stage (``requires_grad``; the
+        saved policies keep the flag, so modules of earlier stages that the method froze are left out).
         ``bytes``: memory of the parameters and buffers (such as fixed eigenvectors).
         ``flops_per_action``: floating-point operations of the matrix products of one forward pass
         (one multiply-add counts as 2), from :class:`torch.utils.flop_counter.FlopCounterMode`.
@@ -29,6 +31,7 @@ def policy_cost(policy: nn.Module, obs_dim: int) -> dict:
         policy(torch.zeros(1, obs_dim, device=device))
     return {
         "parameters": sum(p.numel() for p in policy.parameters()),
+        "trainable_parameters": sum(p.numel() for p in policy.parameters() if p.requires_grad),
         "bytes": sum(t.numel() * t.element_size() for t in tensors),
         "flops_per_action": int(counter.get_total_flops()),
     }

@@ -252,6 +252,7 @@ def main():
             rows.append([
                 label,
                 " / ".join(str(stage["parameters"]) for stage in cost["stages"]),
+                " / ".join(str(stage.get("trainable_parameters", "-")) for stage in cost["stages"]),
                 f"{last['bytes'] / 1024:.0f}",
                 f"{cost['model_size_efficiency']:.2f}",
                 f"{last['flops_per_action'] / 1000:.0f}",
@@ -259,7 +260,7 @@ def main():
                 f"{result['stored_states'][-1]} ({result['stored_bytes'][-1] / 2**20:.0f} MiB)",
             ])
     print("\nCost\n" + markdown_table(
-        ["method", "parameters after each stage", "final memory [KiB]", "MS", "final kFLOPs per action",
+        ["method", "parameters after each stage", "trainable parameters in each stage", "final memory [KiB]", "MS", "final kFLOPs per action",
          "final CPU latency [µs]", "stored states after the last stage"], rows))
 
     if args.output:
